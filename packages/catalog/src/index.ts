@@ -5,6 +5,7 @@ export * from "./effort";
 export * from "./fireworks-model-id";
 export * from "./identity";
 export * from "./model-cache";
+export * from "./model-access";
 export * from "./model-manager";
 export * from "./model-thinking";
 export * from "./model-tokenizer";

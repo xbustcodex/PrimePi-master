@@ -1,5 +1,6 @@
 import type { ModelIdentity } from "./compat/types";
 import type { Effort } from "./effort";
+import type { ModelAccess } from "./model-access";
 
 // Re-exported from @oh-my-pi/pi-utils so the whole workspace shares one
 // `fetch`-compatible signature (tls-fetch's wrappers produce/accept it).
@@ -1372,6 +1373,14 @@ export interface Model<TApi extends Api = Api> {
 	providerType?: string;
 	baseUrl: string;
 	reasoning: boolean;
+	/**
+	 * Explicit free-tier marker. Independent of access and of cost: a `:free`
+	 * model that needs credentials is free but not credential-free. Rule-owned
+	 * via `free` so the catalog never infers it from price.
+	 */
+	free?: boolean;
+	/** How this model is reached. Rule-owned via `model-access`; unclassified means the provider's credentials are required. */
+	access?: ModelAccess;
 	/**
 	 * Exact local tokenizer family resolved from the model identity or supplied
 	 * explicitly by a catalog/discovery source. Absent leaves local counting to

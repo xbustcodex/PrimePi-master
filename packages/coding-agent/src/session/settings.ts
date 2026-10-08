@@ -725,6 +725,26 @@ export const cfgRetryModelFallback = register({
 	},
 });
 
+export const cfgRetryFailoverPolicy = register({
+	id: "retry.failoverPolicy",
+	type: "enum",
+	values: ["off", "same-provider", "free-only", "compatible"] as const,
+	default: "compatible",
+	ui: {
+		tab: "model",
+		group: "Retry & Fallback",
+		label: "Failover Policy",
+		description:
+			"How automatic model failover may range. 'free-only' never silently routes to a paid model; 'compatible' preserves legacy behavior; 'off' disables automatic failover.",
+		options: [
+			{ value: "compatible", label: "Compatible (allow paid)" },
+			{ value: "free-only", label: "Free only" },
+			{ value: "same-provider", label: "Same provider" },
+			{ value: "off", label: "Off" },
+		],
+	},
+});
+
 export const cfgRetryUsageAwareFallback = register({
 	id: "retry.usageAwareFallback",
 	type: "boolean",

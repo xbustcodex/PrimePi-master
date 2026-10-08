@@ -9,6 +9,7 @@
 
 import { resolveDiscoveryApi, resolveModelPolicy } from "./compat/resolve";
 import type { ModelIdentity } from "./compat/types";
+import { withAccessFlag, withFreeFlag } from "./model-access";
 import { resolveModelTokenizer } from "./model-tokenizer";
 import { materializeTimeBasedCost } from "./pricing";
 import { type Api, MODEL_KINDS, type Model, type ModelSpec } from "./types";
@@ -76,6 +77,19 @@ function isInputModalities(value: unknown): value is ("text" | "image")[] {
 function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: Record<string, unknown>): void {
 	const kind = MODEL_KINDS.find(value => value === catalog.kind);
 	if (kind !== undefined) model.kind = kind;
+	// Rule-owned metadata; explicit `free`/`access` wins over the id-suffix derivation below.
+	if (catalog.free === true) model.free = true;
+	else if (catalog.free === false) model.free = false;
+	if (
+		catalog.access === "anonymous" ||
+		catalog.access === "login" ||
+		catalog.access === "api-key" ||
+		catalog.access === "subscription" ||
+		catalog.access === "local" ||
+		catalog.access === "unknown"
+	) {
+		model.access = catalog.access;
+	}
 	if (catalog.contextWindowAuthoritative === true) {
 		model.contextWindowAuthoritative = true;
 	} else {
@@ -363,6 +377,16 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 	};
 	applyCatalogAssignments(model, policy.catalog);
 	applyCatalogCorrections(model, policy.catalog);
+	// Explicit rule values win; otherwise derive from id suffix and the confirmed
+	// credential-free set so every model carries an honest free/access marker.
+	if (model.free === undefined) {
+		const derived = withFreeFlag({ id: model.id });
+		if (derived.free !== undefined) model.free = derived.free;
+	}
+	if (model.access === undefined) {
+		const derived = withAccessFlag({ id: model.id, provider: model.provider });
+		if (derived.access !== undefined) model.access = derived.access;
+	}
 	// Configured lifetimes replace catalog lifetimes rather than merging with them.
 	if (spec.promptCacheConfig !== undefined) model.promptCache = { ...spec.promptCacheConfig };
 	return model;

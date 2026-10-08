@@ -79,7 +79,7 @@ import type {
 	UsageReport,
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
-import { type Effort, serviceTierFamily, streamSimple } from "@oh-my-pi/pi-ai";
+import { AvailabilityCooldowns, type Effort, serviceTierFamily, streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
@@ -786,6 +786,7 @@ export class AgentSession implements SettingsScope {
 
 	// Retry state
 	readonly #recovery: TurnRecovery;
+	readonly #availabilityCooldowns = new AvailabilityCooldowns();
 	#textOutputCommitted = true;
 	#planModeReminderCount = 0;
 	#planModeReminderAwaitingProgress = false;
@@ -1612,6 +1613,7 @@ export class AgentSession implements SettingsScope {
 			modelRegistry: this.#modelRegistry,
 			configWarnings: this.configWarnings,
 			model: () => this.model,
+			availabilityCooldowns: () => this.#availabilityCooldowns,
 			contextFitsModel: (model, excludedMessage) => this.#maintenance.contextFitsModel(model, excludedMessage),
 			textOutputCommitted: () => this.#textOutputCommitted,
 			thinkingLevel: () => this.thinkingLevel,
@@ -4040,6 +4042,7 @@ export class AgentSession implements SettingsScope {
 			// replayed. Visible/side-effecting output then remains terminal while its
 			// credential is still blocked or rotated exactly once.
 			await this.#recovery.recordUsageLimitOutcome(msg);
+			this.#recovery.recordAvailabilityFailure(msg);
 
 			let compactionResult = COMPACTION_CHECK_NONE;
 			let checkedCompaction = false;

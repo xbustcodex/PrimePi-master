@@ -19,6 +19,14 @@ import type {
 	AnthropicFallbackCreditHandle,
 } from "@oh-my-pi/pi-ai";
 import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@oh-my-pi/pi-ai";
+import {
+	classifyAvailabilityFailure,
+	policyAllowsPaid,
+	selectFailoverCandidate,
+	type FailoverPolicy,
+	type TurnRequirements,
+} from "@oh-my-pi/pi-ai";
+import type { AvailabilityCooldowns } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { extractProviderRetryHint } from "@oh-my-pi/pi-ai/utils/retry-after";
 import { fallbackCreditTargets } from "@oh-my-pi/pi-catalog/compat/fallback-credit";
@@ -27,7 +35,8 @@ import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-cat
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isUnexpectedSocketCloseMessage, logger, prompt, sleepLong } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { formatModelStringWithRouting, resolveModelOverride } from "../config/model-resolver";
+import { disabledProviderIds, formatModelStringWithRouting, resolveModelOverride } from "../config/model-resolver";
+import { isProviderUsable } from "../config/model-usability";
 
 import type { Settings } from "../config/settings";
 import type { RetryErrorUpdate } from "../extensibility/shared-events";
@@ -81,6 +90,7 @@ import {
 	cfgModelLoopGuardEnabled,
 	cfgRetry,
 	cfgRetryEnabled,
+	cfgRetryFailoverPolicy,
 	cfgRetryModelFallback,
 	cfgRetryUsageAwareFallback,
 	cfgRetryUsageReservePct,
@@ -210,6 +220,8 @@ export interface TurnRecoveryHost {
 	modelRegistry: ModelRegistry;
 	configWarnings: string[];
 	model(): Model | undefined;
+	/** Session-owned cooldown registry fed by classified provider failures. */
+	availabilityCooldowns(): AvailabilityCooldowns;
 	/**
 	 * Whether the live context fits `model`'s usable window. `excludedMessage`
 	 * identifies a failed assistant turn that will be removed before retrying, so
@@ -775,6 +787,42 @@ export class TurnRecovery {
 			this.#usageLimitOutcomes.set(message, recorded);
 		}
 		return (await recorded).switchedCredential;
+	}
+
+	/** Records one classified availability failure into the session cooldown registry. */
+	recordAvailabilityFailure(message: AssistantMessage): void {
+		if (message.stopReason !== "error") return;
+		const activeModel = this.#host.model();
+		if (!activeModel) return;
+		const failure = classifyAvailabilityFailure({
+			provider: activeModel.provider,
+			modelId: activeModel.id,
+			errorMessage: message.errorMessage || "Unknown error",
+			stopReason: message.stopReason,
+			now: Date.now(),
+		});
+		if (!failure) return;
+		this.#host.availabilityCooldowns().record({
+			key: failure.key,
+			scope: failure.scope,
+			reason: failure.reason,
+			resetAtMs: failure.resetAtMs,
+			now: Date.now(),
+		});
+	}
+
+	/** PrimePi eligibility gate shared by the usage-fallback and error-fallback paths. */
+	#passesFailoverGate(candidate: Model, failedModel: Model | undefined): boolean {
+		const cooldowns = this.#host.availabilityCooldowns();
+		if (cooldowns.isModelUnavailable({ provider: candidate.provider, modelId: candidate.id, now: Date.now() })) {
+			return false;
+		}
+		const policy = cfgRetryFailoverPolicy.get(this.#host.settings) as FailoverPolicy;
+		// Free stays free: when the active model is free and policy forbids paid,
+		// a paid candidate is never eligible, even if reachable.
+		if (failedModel?.free === true && !policyAllowsPaid(policy) && candidate.free !== true) return false;
+		if (!isProviderUsable(candidate.provider, disabledProviderIds(this.#host.settings))) return false;
+		return true;
 	}
 
 	/** Prompts after transient overlap with a prior agent run. */
@@ -1890,6 +1938,7 @@ export class TurnRecovery {
 				const resolved = resolveModelOverride([candidate.raw], this.#host.modelRegistry, this.#host.settings);
 				const candidateModel = resolved.model ?? this.#host.modelRegistry.find(candidate.provider, candidate.id);
 				if (!candidateModel || !this.#host.modelRegistry.hasConfiguredAuth(candidateModel)) continue;
+				if (!this.#passesFailoverGate(candidateModel, currentModel)) continue;
 				if (ceiling !== undefined && !modelSupportsEffortCeiling(candidateModel, ceiling)) continue;
 				// A usage fallback must also fit: skip a candidate whose window cannot
 				// hold the live context so we never switch onto an oversized request
@@ -2119,6 +2168,10 @@ export class TurnRecovery {
 			? this.#host.modelRegistry.find(failedMessage.provider, failedMessage.model)
 			: undefined;
 		const creditTargets = failedModel ? fallbackCreditTargets(failedModel) : [];
+		// Candidates that survive route-specific fitness checks; the policy
+		// authority below picks among them. A switch is only a route until a
+		// turn settles on the fallback (`served`), so nothing is applied first.
+		const eligible: Array<{ role: string; selector: RetryFallbackSelector; candidate: Model }> = [];
 		for (const role of this.retryFallbackChainKeys(currentSelector)) {
 			for (const selector of this.findRetryFallbackCandidates(role, currentSelector, undefined, options)) {
 				if (this.isRetryFallbackSelectorSuppressed(selector)) continue;
@@ -2171,25 +2224,52 @@ export class TurnRecovery {
 				if (!this.#host.contextFitsModel(candidate, options?.preserveFailedTurn ? undefined : failedMessage)) {
 					continue;
 				}
-				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
-				if (!apiKey) continue;
-				const previousEditMode = this.#host.resolveActiveEditMode();
-				const applied = await this.applyRetryFallbackCandidate(role, selector, currentSelector, {
-					...options,
-					reason: `Request failed: ${failedMessage.errorMessage ?? "provider returned an error without details"}`,
-				});
-				const editModeChanged = this.#host.resolveActiveEditMode() !== previousEditMode;
-				if (applied && options?.pinFallback === true && canRedeemFallbackCredit && !editModeChanged) {
-					this.#activeFallbackCreditRedemption = {
-						targetSelector: `${candidate.provider}/${candidate.id}`,
-						handle: failedMessage.fallbackCreditHandle!,
-					};
-				}
-				return applied;
+				eligible.push({ role, selector, candidate });
 			}
 		}
 
-		return false;
+		if (eligible.length === 0) return false;
+		const decisionFailedModel =
+			this.#host.modelRegistry.find(failedMessage.provider, failedMessage.model) ?? this.#host.model();
+		if (!decisionFailedModel) return false;
+		const failoverPolicy = cfgRetryFailoverPolicy.get(this.#host.settings) as FailoverPolicy;
+		const cooldowns = this.#host.availabilityCooldowns();
+		const decision = selectFailoverCandidate({
+			failed: decisionFailedModel,
+			policy: failoverPolicy,
+			candidates: eligible.map(entry => ({ model: entry.candidate })),
+			requirements: {} as TurnRequirements,
+			cooldowns,
+			attempted: new Set<string>(),
+			now: Date.now(),
+		});
+		if (!("model" in decision)) return false;
+		const pick = eligible.find(
+			entry => entry.candidate.provider === decision.model.provider && entry.candidate.id === decision.model.id,
+		);
+		if (!pick) return false;
+		const apiKey = await this.#host.modelRegistry.getApiKey(pick.candidate, this.#host.sessionId());
+		if (!apiKey) return false;
+		const previousEditMode = this.#host.resolveActiveEditMode();
+		const applied = await this.applyRetryFallbackCandidate(pick.role, pick.selector, currentSelector, {
+			...options,
+			reason: `Request failed: ${failedMessage.errorMessage ?? "provider returned an error without details"}`,
+		});
+		const editModeChanged = this.#host.resolveActiveEditMode() !== previousEditMode;
+		const canRedeemForPick =
+			failedMessage.fallbackCreditHandle !== undefined &&
+			failedModel !== undefined &&
+			creditTargets.includes(pick.candidate.id) &&
+			pick.candidate.api === "anthropic-messages" &&
+			pick.candidate.provider === failedMessage.provider &&
+			Date.now() < failedMessage.fallbackCreditHandle.expiresAt;
+		if (applied && options?.pinFallback === true && canRedeemForPick && !editModeChanged) {
+			this.#activeFallbackCreditRedemption = {
+				targetSelector: `${pick.candidate.provider}/${pick.candidate.id}`,
+				handle: failedMessage.fallbackCreditHandle!,
+			};
+		}
+		return applied;
 	}
 
 	/** The active model when it is a Fireworks Fast (`-fast`) variant, else undefined. */

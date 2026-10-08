@@ -58,6 +58,7 @@ import {
 import type { Settings } from "./settings";
 
 import { cfgDisabledProviders, cfgEnabledModels, cfgModelProviderOrder } from "./model-settings";
+import { isProviderUsable } from "./model-usability";
 import { cfgRetryFallbackChains } from "../session/settings";
 
 function isKnownProvider(provider: string): provider is KnownProvider {
@@ -1750,7 +1751,9 @@ export async function resolveModelOverrideWithAuthFallback(
 	const disabledProviders = disabledProviderIds(settings);
 	let lookupRegistry: ModelLookupRegistry = modelRegistry;
 	if (disabledProviders.size > 0) {
-		const enabledModels = modelRegistry.getAvailable().filter(model => !disabledProviders.has(model.provider));
+		const enabledModels = modelRegistry
+			.getAvailable()
+			.filter(model => isProviderUsable(model.provider, disabledProviders));
 		lookupRegistry = { getAvailable: () => enabledModels };
 	}
 	// Expand first: a role (or comma-separated item) may contain several
@@ -2131,8 +2134,8 @@ export function resolveCliModel(options: CliModelOptions): ResolveCliModelResult
 	if (disabled.size === 0) return resolveCliModelInScope(scoped, scope);
 
 	const enabled = resolveCliModelInScope(scoped, {
-		all: scope.all.filter(model => !disabled.has(model.provider)),
-		available: scope.available.filter(model => !disabled.has(model.provider)),
+		all: scope.all.filter(model => isProviderUsable(model.provider, disabled)),
+		available: scope.available.filter(model => isProviderUsable(model.provider, disabled)),
 	});
 	if (enabled.model) return enabled;
 

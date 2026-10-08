@@ -428,6 +428,15 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	priority: { key: "priority", set: "catalog", shape: "scalar" },
 	"service-tier-cost": { key: "serviceTierCost", set: "catalog", shape: "object" },
 	"time-based-cost": { key: "timeBased", set: "catalog", shape: "object" },
+	/** Explicit free-tier marker; free is independent of access and of cost. */
+	free: { key: "free", set: "catalog", shape: "scalar", values: [true, false] },
+	/** How a model is reached. Explicit, never inferred from provider id. */
+	"model-access": {
+		key: "access",
+		set: "catalog",
+		shape: "scalar",
+		values: ["anonymous", "login", "api-key", "subscription", "local", "unknown"],
+	},
 
 	// ── catalog: routed-subscription registry ──
 	// A gateway whose proxy fans one model out to several upstreams (Factory

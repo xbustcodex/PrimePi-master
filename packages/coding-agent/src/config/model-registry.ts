@@ -130,6 +130,7 @@ import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-con
 import { type Settings, settings } from "./settings";
 
 import { cfgDisabledProviders } from "./model-settings";
+import { isProviderUsable } from "./model-usability";
 import { cfgExtendedContext } from "../session/context-settings";
 
 // DeviceCheck attestation (`x-oai-attestation`) for ChatGPT-OAuth Codex
@@ -1722,7 +1723,7 @@ export class ModelRegistry {
 			providerFilter
 				? this.#discoverableProviders.filter(provider => providerFilter.has(provider.provider))
 				: this.#discoverableProviders
-		).filter(provider => !disabledProviders.has(provider.provider));
+		).filter(provider => isProviderUsable(provider.provider, disabledProviders));
 		const configuredDiscoveriesPromise =
 			selectedDiscoverableProviders.length === 0
 				? Promise.resolve<Array<ConfiguredModelDiscoveryResult & { provider: DiscoveryProviderConfig }>>([])
@@ -2811,7 +2812,7 @@ export class ModelRegistry {
 	getDiscoverableProviders(): string[] {
 		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
 		return this.#discoverableProviders
-			.filter(provider => !disabledProviders.has(provider.provider))
+			.filter(provider => isProviderUsable(provider.provider, disabledProviders))
 			.map(provider => provider.provider);
 	}
 

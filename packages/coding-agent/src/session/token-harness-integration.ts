@@ -24,7 +24,7 @@ import type { ArtifactRef, ArtifactStore, HarnessReport } from "@oh-my-pi/pi-age
 import { runTokenHarness, type HarnessInput } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, appendFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import type { Tokenizer } from "@oh-my-pi/pi-agent-core";
 import type { Settings } from "../config/settings";
@@ -172,6 +172,8 @@ function appendStatsFile(settings: Settings, decision: TokenHarnessDecision, mod
 	const path = cfgTokenHarnessStatsFile.get(settings);
 	if (!path || decision.mode === "off") return;
 	try {
+		const dir = dirname(path);
+		if (dir) mkdirSync(dir, { recursive: true });
 		appendFileSync(
 			path,
 			`${JSON.stringify({ t: Date.now(), model, mode: decision.mode, report: decision.report })}\n`,
