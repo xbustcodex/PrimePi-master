@@ -4,6 +4,31 @@ Status: integration + shadow mode implemented behind the single inference seam,
 disabled by default, committed separately from Wave 1 model-authority work.
 Recommendation at the end: **SHADOW-ONLY first, then controlled activation.**
 
+## E.0 Phase D progress — real-session shadow evidence (2026-10-08)
+
+A real dispatch-shadow probe was run against a **credential-free OpenRouter
+`:free` model** (`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`) via
+`omp -p … --config <shadow overlay>` — no paid calls were made. Findings:
+
+- The harness executed at the real seam on every production request (2 system
+  segments, 12 tool schemas, actual prompt context), including failed attempts
+  (404 retired slugs, transient 429s) — shadow records are emitted for every
+  decision, not just successes.
+- Per-request harness overhead measured on-prod: **<1 ms** (0.9 / 0.14 / 0.27 …
+  0.001 ms per module), i.e. no observable latency cost.
+- Single-turn print sessions correctly show **reductionPct ≈ 0** with every
+  module `no-change`: they have no redundant history for the harness to remove
+  — the fixtures' 47–80% savings are history/tool-output effects that only
+  multi-turn interactive sessions can demonstrate.
+- The dispatched context in shadow is byte-identical to the original (shadow
+  sends `input.messages` untouched), and the successful free-model reply was
+  normal ("OK"), i.e. zero behavioural impact from the shadow path.
+- **Remaining Phase-D debt:** the true 47–80% → real-token translation needs
+  owner-run interactive sessions with `tokenHarness.shadowEnabled: true` and
+  `tokenHarness.statsFile` set; per-request JSONL evidence accumulates to the
+  stats file for analysis. Tool-reliability / prompt-cache A/B also requires
+  those real multi-turn sessions.
+
 ## E.1 Actual files changed (harness commit 6369c24e53)
 
 **New — package `@oh-my-pi/pi-agent-core` (packages/agent):**
