@@ -34,7 +34,7 @@ import { assembleModule } from "./modules/assemble";
 import { validateModule } from "./modules/validate";
 
 /** Canonical pipeline stage order (protect runs as a harness pre-pass). */
-const STAGE_ORDER = ["dedup", "select", "suppress", "compress", "assemble", "validate"] as const;
+export const STAGE_ORDER = ["dedup", "select", "suppress", "compress", "assemble", "validate"] as const;
 
 export interface HarnessOptions {
 	/** Override the module set (plug-and-play swap tests). */
@@ -51,12 +51,12 @@ export function defaultHarnessModules(): HarnessModule[] {
 	return [dedupModule, selectModule, suppressModule, compressModule, assembleModule, validateModule];
 }
 
-function countSystem(tokens: Tokenizer, systemPrompt: string[] | undefined): number {
+export function countSystemTokens(tokens: Tokenizer, systemPrompt: string[] | undefined): number {
 	return systemPrompt && systemPrompt.length > 0 ? tokens.countTokens(systemPrompt) : 0;
 }
 
 /** Tokens of the leading run of messages that are object-identical to baseline. */
-function unchangedPrefixTokens(messages: Message[], baseline: Message[], tokenizer: Tokenizer): number {
+export function countUnchangedPrefix(messages: Message[], baseline: Message[], tokenizer: Tokenizer): number {
 	let tokens = 0;
 	for (let i = 0; i < Math.min(messages.length, baseline.length); i++) {
 		if (messages[i] !== baseline[i]) break;
@@ -65,14 +65,14 @@ function unchangedPrefixTokens(messages: Message[], baseline: Message[], tokeniz
 	return tokens;
 }
 
-function bypassResult(
+export function bypassResult(
 	input: HarnessInput,
 	tokenizer: Tokenizer,
 	latencyMs: number,
 	bypassed: boolean,
 	failure?: HarnessReport["failure"],
 ): HarnessResult {
-	const systemTokens = countSystem(tokenizer, input.systemPrompt);
+	const systemTokens = countSystemTokens(tokenizer, input.systemPrompt);
 	return {
 		ok: false,
 		messages: input.messages,
@@ -93,6 +93,16 @@ function bypassResult(
 	};
 }
 
+/** Thrown when the sync entrypoint is asked to run modules that require isolation. */
+export class HarnessIsolationRequiredError extends Error {
+	constructor(moduleNames: readonly string[]) {
+		super(
+			`${moduleNames.join(", ")} require isolated execution; use runTokenHarnessIsolated with backends instead of runTokenHarness`,
+		);
+		this.name = "HarnessIsolationRequiredError";
+	}
+}
+
 export function runTokenHarness(input: HarnessInput, config?: HarnessConfig, options?: HarnessOptions): HarnessResult {
 	const clock = options?.clock ?? (() => performance.now());
 	const startedAt = clock();
@@ -103,6 +113,14 @@ export function runTokenHarness(input: HarnessInput, config?: HarnessConfig, opt
 	const modules = (options?.modules ?? defaultHarnessModules())
 		.slice()
 		.sort((a, b) => STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage) || a.priority - b.priority);
+
+	// Isolation is never silently degraded: a module that opted into isolated
+	// execution must go through runTokenHarnessIsolated, or its conservative
+	// path would run without the primary/alternative/validation sequence.
+	const isolatedModules = modules.filter(module => module.isolated !== undefined).map(module => module.name);
+	if (isolatedModules.length > 0) {
+		throw new HarnessIsolationRequiredError(isolatedModules);
+	}
 
 	// Bypass: master switch or caller applicability decision (integration point
 	// for catalog-based local-model exclusion — never a hard-coded id list here).
@@ -142,7 +160,7 @@ export function runTokenHarness(input: HarnessInput, config?: HarnessConfig, opt
 		},
 	);
 
-	const systemTokens = countSystem(tokenizer, input.systemPrompt);
+	const systemTokens = countSystemTokens(tokenizer, input.systemPrompt);
 	const inputTokens = tokenizer.countMessages(state.messages) + systemTokens;
 
 	const reportModules: HarnessReport["modules"] = [];
@@ -214,7 +232,7 @@ export function runTokenHarness(input: HarnessInput, config?: HarnessConfig, opt
 		protectedElements: state.protectedRefs,
 		artifacts: state.artifacts,
 		warnings: state.warnings,
-		unchangedPrefixTokens: unchangedPrefixTokens(state.messages, baselineMessages, tokenizer),
+		unchangedPrefixTokens: countUnchangedPrefix(state.messages, baselineMessages, tokenizer),
 		bypassed: false,
 	};
 	return { ok: true, messages: state.messages, report };

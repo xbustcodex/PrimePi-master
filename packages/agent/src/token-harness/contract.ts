@@ -90,7 +90,16 @@ export interface ArtifactStore {
 export interface StageStat {
 	module: string;
 	stage: StageKind;
-	status: "applied" | "no-change" | "unavailable" | "skipped" | "failed";
+	status:
+		| "applied"
+		| "applied-isolated"
+		| "no-change"
+		| "conservative"
+		| "failed-isolated"
+		| "skipped-stage-handled"
+		| "unavailable"
+		| "skipped"
+		| "failed";
 	latencyMs: number;
 	mutatedMessages: number;
 }
@@ -166,6 +175,76 @@ export interface HarnessModule {
 	health(): ModuleHealth;
 	process(state: HarnessState, ctx: HarnessContext): void;
 	validate?(state: HarnessState, ctx: HarnessContext): string[];
+	/**
+	 * Optional isolated plugin. When present, the async entrypoint
+	 * `runTokenHarnessIsolated` (with a configured {@link IsolatedBackend})
+	 * executes the primary op in the isolated runtime, falls back to
+	 * `process` (the module's own conservative in-process path) on any
+	 * failure, and only then fails open to the original context. For an
+	 * isolated module, `process` MUST be the conservative path — a plugin may
+	 * never bypass validation, so heavy plugins implement the risky work in
+	 * `isolated` and keep a validated, dependency-free `process` fallback.
+	 */
+	readonly isolated?: IsolatedPlugin;
+}
+
+/** Plain-serializable payload a module hands to the isolated backend. */
+export interface IsolatedRequest {
+	/** Stable op id understood by the backend (registry key). */
+	readonly op: string;
+	/** Payload MUST be JSON-serializable (no functions, schemas, or handles). */
+	readonly payload: unknown;
+}
+
+export type IsolatedRunResult =
+	| { ok: true; payload: unknown; elapsedMs: number }
+	| {
+			ok: false;
+			reason: "timeout" | "crash" | "malformed" | "unavailable" | "cancelled";
+			message: string;
+			elapsedMs: number;
+	  };
+
+/**
+ * Isolated execution backend: runs a plugin op in a separate runtime/process.
+ * Implementations decide the runtime (Bun child, Python, CLI, service). The
+ * backend MUST enforce its own deadline and terminate the work AND its process
+ * tree when it expires — cleanup is not the pipeline's responsibility past
+ * calling `run` with `timeoutMs`/`signal`.
+ */
+export interface IsolatedBackend {
+	readonly kind: string;
+	run(request: IsolatedRequest, options: { timeoutMs: number; signal?: AbortSignal }): Promise<IsolatedRunResult>;
+	/** Best-effort release of pooled resources (workers/clients). Idempotent. */
+	shutdown?(): Promise<void>;
+}
+
+/** The isolated-plugin descriptor attached to a module. The pipeline owns the isolation and fallback authority. */
+export interface IsolatedPlugin {
+	/** Stable op id. Resolved against the backend's op registry. */
+	readonly op: string;
+	/** Build the serializable request; return undefined to no-op this round. */
+	prepare(state: HarnessState, ctx: HarnessContext): IsolatedRequest | undefined;
+	/** Apply a validated result back onto `state`. Must never throw on malformed input. */
+	apply(state: HarnessState, ctx: HarnessContext, result: unknown): void;
+}
+
+/** Shared deadline configuration for the isolated execution path. */
+export interface IsolatedBudgetConfig {
+	/** Per-module execution budget (ms) for each primary/alternative attempt. Default 500. */
+	moduleBudgetMs: number;
+	/** Overall deadline (ms) bounding all isolated attempts; default 2000. */
+	overallBudgetMs: number;
+}
+
+export const DEFAULT_ISOLATED_MODULE_BUDGET_MS = 500;
+export const DEFAULT_ISOLATED_OVERALL_BUDGET_MS = 2_000;
+
+export function resolveIsolatedBudget(config?: IsolatedBudgetConfig): IsolatedBudgetConfig {
+	return {
+		moduleBudgetMs: config?.moduleBudgetMs ?? DEFAULT_ISOLATED_MODULE_BUDGET_MS,
+		overallBudgetMs: config?.overallBudgetMs ?? DEFAULT_ISOLATED_OVERALL_BUDGET_MS,
+	};
 }
 
 export function resolveHarnessConfig(config?: HarnessConfig): HarnessContext["config"] {

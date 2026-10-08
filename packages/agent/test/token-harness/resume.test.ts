@@ -43,7 +43,7 @@ describe("token-harness session/resume resilience", () => {
 		expect(first.ok).toBe(true);
 		const restored = roundTrip(first.messages);
 
-		const idOf = (m: Message, role: string): string | undefined => {
+		const idOf = (m: Message, _role: string): string | undefined => {
 			if (m.role === "toolResult") return (m as { toolCallId: string }).toolCallId;
 			return undefined;
 		};
