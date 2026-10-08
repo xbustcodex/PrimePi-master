@@ -32,8 +32,9 @@ import {
 	type HarnessResult,
 	type HarnessState,
 	type IsolatedBackend,
-	type IsolatedRequest,
 	type IsolatedBudgetConfig,
+	type IsolatedRequest,
+	type IsolatedRunResult,
 	resolveHarnessConfig,
 	resolveIsolatedBudget,
 } from "./contract";
@@ -57,6 +58,51 @@ export interface IsolatedHarnessOptions extends HarnessOptions {
 }
 
 type ModuleStat = HarnessReport["modules"][number];
+
+/**
+ * Race a backend attempt against the pipeline's authoritative guard: the
+ * remaining shared deadline and caller abort.
+ *
+ * A backend that cooperates enforces its own deadline; a NON-COOPERATIVE
+ * backend (ignores timeoutMs, never resolves) must not be able to hang the
+ * request. This guard abandons the wait at `guardMs` — the pipeline proceeds
+ * to the next alternative / conservative / fail-open while the orphaned
+ * attempt is fire-and-forgotten (its handlers are attached here, so a late
+ * rejection can never surface as an unhandled rejection). Real termination of
+ * a compliant backend stays the backend's job; this guard only prevents the
+ * endless/hanging wait the shared overall deadline promises.
+ */
+type GuardedRun = { kind: "result"; value: IsolatedRunResult } | { kind: "deadline" } | { kind: "aborted" };
+
+function raceBackendRun(
+	run: Promise<IsolatedRunResult>,
+	guardMs: number,
+	signal: AbortSignal | undefined,
+): Promise<GuardedRun> {
+	if (guardMs <= 0) return Promise.resolve({ kind: "deadline" });
+	return new Promise<GuardedRun>(resolve => {
+		let settled = false;
+		const finish = (out: GuardedRun): void => {
+			if (settled) return;
+			settled = true;
+			resolve(out);
+		};
+		void Promise.resolve(run)
+			.then(value => finish({ kind: "result", value }))
+			.catch(() =>
+				finish({
+					kind: "result",
+					value: { ok: false, reason: "crash", message: "backend rejected", elapsedMs: 0 },
+				}),
+			);
+		const timer = setTimeout(() => finish({ kind: "deadline" }), guardMs);
+		timer.unref?.();
+		if (signal) {
+			if (signal.aborted) finish({ kind: "aborted" });
+			else signal.addEventListener("abort", () => finish({ kind: "aborted" }), { once: true });
+		}
+	});
+}
 
 export async function runTokenHarnessIsolated(
 	input: HarnessInput,
@@ -235,19 +281,24 @@ export async function runTokenHarnessIsolated(
 			if (options.signal?.aborted) {
 				return failOpen(module.name, "cancelled by caller");
 			}
-			let result;
-			try {
-				result = await backend.run(request, { timeoutMs: attemptBudget, signal: options.signal });
-			} catch (error) {
-				if (options.signal?.aborted) {
-					return failOpen(module.name, "cancelled by caller");
-				}
-				lastFailure = `backend unavailable: ${error instanceof Error ? error.message : String(error)}`;
-				continue;
-			}
-			if (options.signal?.aborted) {
+			// Authoritative guard: size the attempt against BOTH the per-module
+			// budget and whatever remains of the shared overall deadline, then
+			// race it. A non-cooperative backend cannot hang the request.
+			const deadlineNow = overallDeadline - clock();
+			const guardMs = Math.max(0, Math.min(attemptBudget, deadlineNow));
+			const raced = await raceBackendRun(
+				backend.run(request, { timeoutMs: attemptBudget, signal: options.signal }),
+				guardMs,
+				options.signal,
+			);
+			if (raced.kind === "aborted") {
 				return failOpen(module.name, "cancelled by caller");
 			}
+			if (raced.kind === "deadline") {
+				lastFailure = `backend attempt exceeded the remaining budget (${guardMs}ms)`;
+				continue;
+			}
+			const result = raced.value;
 			if (result.ok) {
 				const rollback = snapshot();
 				try {

@@ -261,6 +261,51 @@ describe("token-harness isolated pipeline", () => {
 		expect(resultA.report.inputTokens).not.toBe(resultB.report.inputTokens);
 	});
 
+	it("never hangs on a NON-COOPERATIVE backend that ignores its deadline and never resolves", async () => {
+		// The hardest case: the backend ignores timeoutMs AND the abort signal and
+		// simply never resolves. The pipeline's authoritative guard must abandon
+		// the wait and route to the conservative validated path within the
+		// overall deadline instead of hanging forever.
+		const input = { systemPrompt: ["sys"], messages: stubBaseline() };
+		const nonCooperative = new FakeBackend((): Promise<IsolatedRunResult> => new Promise(() => {}));
+		const started = performance.now();
+		const result = await runTokenHarnessIsolated(input, undefined, {
+			backends: nonCooperative,
+			modules: isolatedModules("isolate.hung"),
+			budget: { moduleBudgetMs: 60, overallBudgetMs: 120 },
+			clock: () => performance.now(),
+		});
+		const elapsed = performance.now() - started;
+		expect(result.ok).toBe(true);
+		const stat = [...result.report.modules].reverse().find(m => m.module === "isolate.hung");
+		expect(stat?.status).toBe("conservative");
+		expect(elapsed).toBeLessThan(500);
+		// The conservative path actually ran, so the message reflects it.
+		const text = (result.messages[2] as { content: { text: string }[] }).content[0].text;
+		expect(text.startsWith("isolate.hung-conservative")).toBe(true);
+	});
+
+	it("surfaces a late rejection after the guard as a failure, never an unhandled rejection", async () => {
+		// Backend resolves (rejects) AFTER the guard already abandoned the wait;
+		// the pipeline must have attached handlers (no unhandled rejection) and
+		// must still produce a conservative-validated outcome deterministically.
+		const input = { systemPrompt: ["sys"], messages: stubBaseline() };
+		const late = new FakeBackend(
+			() =>
+				new Promise<IsolatedRunResult>((_resolve, reject) => setTimeout(() => reject(new Error("late crash")), 60)),
+		);
+		const result = await runTokenHarnessIsolated(input, undefined, {
+			backends: late,
+			modules: isolatedModules("isolate.hung"),
+			budget: { moduleBudgetMs: 10, overallBudgetMs: 120 },
+			clock: () => performance.now(),
+		});
+		expect(result.ok).toBe(true);
+		const stat = [...result.report.modules].reverse().find(m => m.module === "isolate.hung");
+		expect(stat?.status).toBe("conservative");
+		expect(result.report.warnings.join()).toContain("remaining budget");
+	});
+
 	it("sync runTokenHarness refuses modules that require isolation", () => {
 		const input = { systemPrompt: ["sys"], messages: stubBaseline() };
 		expect(() => runTokenHarness(input, undefined, { modules: isolatedModules() })).toThrow(
