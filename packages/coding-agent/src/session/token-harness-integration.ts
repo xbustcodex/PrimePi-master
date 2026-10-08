@@ -23,7 +23,7 @@ import type { Context, Model } from "@oh-my-pi/pi-ai";
 import type { ArtifactRef, ArtifactStore, HarnessReport } from "@oh-my-pi/pi-agent-core";
 import { runTokenHarness, type HarnessInput } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import type { Tokenizer } from "@oh-my-pi/pi-agent-core";
@@ -44,6 +44,18 @@ export const cfgTokenHarnessShadow = register({
 	id: "tokenHarness.shadowEnabled",
 	type: "boolean",
 	default: false,
+});
+
+/**
+ * Opt-in diagnostic: append one JSON line per harness decision to this file
+ * (config-file only, default unset). Used for Phase-D shadow evidence; the
+ * decision itself is unchanged and the append is synchronous so it always
+ * flushes before process exit.
+ */
+export const cfgTokenHarnessStatsFile = register({
+	id: "tokenHarness.statsFile",
+	type: "string",
+	default: undefined,
 });
 
 /**
@@ -155,6 +167,22 @@ function recordStats(report: HarnessReport, mode: "active" | "shadow"): void {
 	});
 }
 
+/** Opt-in on-disk evidence line (Phase-D shadow collection). Synchronous so it survives process exit. */
+function appendStatsFile(settings: Settings, decision: TokenHarnessDecision, model: string): void {
+	const path = cfgTokenHarnessStatsFile.get(settings);
+	if (!path || decision.mode === "off") return;
+	try {
+		appendFileSync(
+			path,
+			`${JSON.stringify({ t: Date.now(), model, mode: decision.mode, report: decision.report })}\n`,
+			"utf8",
+		);
+	} catch (error) {
+		if (error instanceof Error)
+			logger.debug("prime-token-harness stats append failed", { path, error: error.message });
+	}
+}
+
 /**
  * Decide how to handle one request. Reads settings per call (a mid-request
  * toggle takes effect immediately). Returns `off` when disabled, bypassed, or
@@ -180,15 +208,19 @@ export function decideTokenHarness(
 	if (enabled) {
 		recordStats(result.report, "active");
 		if (!result.ok) return { mode: "off" }; // fail open
-		return {
+		const decision: TokenHarnessDecision = {
 			mode: "active",
 			context: { ...context, messages: result.messages },
 			report: result.report,
 		};
+		appendStatsFile(settings, decision, model.id);
+		return decision;
 	}
 	// shadow mode: compute + record, dispatch the ORIGINAL context.
 	recordStats(result.report, "shadow");
-	return { mode: "shadow", report: result.report };
+	const decision: TokenHarnessDecision = { mode: "shadow", report: result.report };
+	appendStatsFile(settings, decision, model.id);
+	return decision;
 }
 
 /**
