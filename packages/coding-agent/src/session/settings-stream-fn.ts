@@ -20,6 +20,7 @@ import { type Model, type SimpleStreamOptions, streamSimple } from "@oh-my-pi/pi
 import { serverSideFallbackModels } from "@oh-my-pi/pi-catalog/compat/server-side-fallback";
 import type { Encoding } from "@oh-my-pi/pi-natives";
 import type { Settings } from "../config/settings";
+import { decideTokenHarness } from "./token-harness-integration";
 import { type AnthropicSlowModeLanes, anthropicSlowModeLanes } from "./anthropic-slow-mode";
 
 import {
@@ -161,6 +162,12 @@ export function createSettingsAwareStreamFn(
 			...(fallbacks !== undefined ? { fallbacks } : {}),
 			...(slowModeHooks !== undefined ? { anthropicSlowMode: slowModeHooks } : {}),
 		};
+		// Prime Token Harness: shadow or controlled active preprocessing at the
+		// single common online-inference seam. Disabled by default; any failure
+		// fails open to the original context. Harness bypasses (on-device
+		// runtimes) and off decisions pass straight through.
+		const harness = decideTokenHarness(settings, model, context, tokenizer);
+		if (harness.mode === "active") return base(model, harness.context, merged);
 		return base(model, context, merged);
 	};
 }

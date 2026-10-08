@@ -24,6 +24,8 @@ export * from "./speculative-execution";
 export * from "./telemetry";
 // Thinking selectors
 export * from "./thinking";
+// Prime Token Harness (prototype: always-on online-request preprocessing)
+export * from "./token-harness";
 // Tool-context augmentation
 export * from "./tool-context";
 // Tokenizer choice
