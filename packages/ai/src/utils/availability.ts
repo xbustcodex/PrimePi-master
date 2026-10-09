@@ -163,6 +163,12 @@ export function classifyAvailabilityFailure(input: {
 	errorMessage: string;
 	stopReason: string;
 	now?: number;
+	/**
+	 * The upstream route this request went to, when the model is reached through an
+	 * explicit route. A failure there says nothing about the model's other routes,
+	 * so recording it against every route would throw away a working recovery.
+	 */
+	baseUrl?: string;
 }): AvailabilityFailure | undefined {
 	if (input.stopReason !== "error") return undefined;
 
@@ -182,8 +188,28 @@ export function classifyAvailabilityFailure(input: {
 				? metadata.remedyHint
 				: undefined;
 
+	/**
+	 * The narrowest scope that still covers what failed. A model reached through an
+	 * explicit route excludes only that route: a sibling route is a different
+	 * upstream and stays a valid recovery, so collapsing them would throw away a
+	 * working route on every single-route failure.
+	 */
+	const limitScope = scopeForLimitSource(limitSource ?? "", input.provider, input.modelId);
+	const narrow =
+		input.baseUrl === undefined
+			? { scope: limitScope === "route" ? "model" : limitScope, key: `model:${input.provider}:${input.modelId}` }
+			: {
+					scope: limitScope,
+					key:
+						limitScope === "model" || limitScope === "route"
+							? `route:${input.provider}:${input.modelId}:${input.baseUrl}`
+							: limitScope === "provider"
+								? `provider:${input.provider}`
+								: fundingPoolKey(input.provider, limitSource!),
+				};
+	const scope = narrow.scope;
+
 	if (limitSource) {
-		const scope = scopeForLimitSource(limitSource, input.provider, input.modelId);
 		const resetAtMs = parseResetMs(asRecord(metadata?.headers));
 		// A pool or provider scope with a known reset is conclusively unavailable:
 		// the same request cannot succeed before then, so do not burn retries.
@@ -195,24 +221,21 @@ export function classifyAvailabilityFailure(input: {
 		return {
 			recoverable: true,
 			scope,
-			key:
-				scope === "model" || scope === "route"
-					? `model:${input.provider}:${input.modelId}`
-					: fundingPoolKey(input.provider, limitSource),
+			key: scope === "model" || scope === "route" ? narrow.key : fundingPoolKey(input.provider, limitSource),
 			reason,
 			...(resetAtMs === undefined ? {} : { resetAtMs }),
 			exhausted,
 		};
 	}
 
-	// No structured metadata: fall back to the existing classifier, which is pure
-	// text matching. Only transient availability language qualifies, and it stays
-	// model-scoped so unrelated models are not excluded.
+	// No structured metadata: fall back to text matching. Only transient
+	// availability language qualifies, and it stays at the narrowest scope that
+	// still covers the failure so unrelated models and routes are not excluded.
 	if (!isRetryableProviderErrorText(input.stopReason, input.errorMessage)) return undefined;
 	return {
 		recoverable: true,
-		scope: "model",
-		key: `model:${input.provider}:${input.modelId}`,
+		scope: narrow.scope,
+		key: narrow.key,
 		reason: "transient provider availability failure",
 		exhausted: false,
 	};

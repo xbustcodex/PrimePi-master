@@ -799,6 +799,7 @@ export class TurnRecovery {
 			modelId: activeModel.id,
 			errorMessage: message.errorMessage || "Unknown error",
 			stopReason: message.stopReason,
+			baseUrl: activeModel.baseUrl,
 			now: Date.now(),
 		});
 		if (!failure) return;
@@ -814,7 +815,14 @@ export class TurnRecovery {
 	/** PrimePi eligibility gate shared by the usage-fallback and error-fallback paths. */
 	#passesFailoverGate(candidate: Model, failedModel: Model | undefined): boolean {
 		const cooldowns = this.#host.availabilityCooldowns();
-		if (cooldowns.isModelUnavailable({ provider: candidate.provider, modelId: candidate.id, now: Date.now() })) {
+		if (
+			cooldowns.isModelUnavailable({
+				provider: candidate.provider,
+				modelId: candidate.id,
+				baseUrl: candidate.baseUrl,
+				now: Date.now(),
+			})
+		) {
 			return false;
 		}
 		const policy = cfgRetryFailoverPolicy.get(this.#host.settings) as FailoverPolicy;
@@ -2147,6 +2155,34 @@ export class TurnRecovery {
 		return true;
 	}
 
+	/**
+	 * What the unfinished turn demands of a replacement model.
+	 *
+	 * Read from the live agent state rather than asserted empty: this compatibility
+	 * gate is the only thing standing between a candidate the provider will reject
+	 * and a turn that then fails twice.
+	 *
+	 * Two capabilities are deliberately absent. The context window is judged by
+	 * `contextFitsModel` in the caller, against the request that will actually be
+	 * sent, and a second estimate could only disagree with it. Reasoning is absent
+	 * because falling back to a non-reasoning model is a supported downgrade —
+	 * `applyRetryFallbackCandidate` clamps the thinking level to what the new model
+	 * can honour — while refusing that switch would strand the turn on a route that
+	 * is already known to be failing.
+	 */
+	#turnRequirements(): TurnRequirements {
+		const { tools, messages } = this.#host.agent.state;
+		return {
+			requiresTools: tools.length > 0,
+			requiresImageInput: messages.some(
+				message =>
+					"content" in message &&
+					Array.isArray(message.content) &&
+					message.content.some(part => part.type === "image"),
+			),
+		};
+	}
+
 	async #tryRetryModelFallback(
 		currentSelector: string,
 		failedMessage: AssistantMessage,
@@ -2234,19 +2270,42 @@ export class TurnRecovery {
 		if (!decisionFailedModel) return false;
 		const failoverPolicy = cfgRetryFailoverPolicy.get(this.#host.settings) as FailoverPolicy;
 		const cooldowns = this.#host.availabilityCooldowns();
+		const now = Date.now();
+		const failedSelector = formatModelStringWithRouting(decisionFailedModel);
 		const decision = selectFailoverCandidate({
 			failed: decisionFailedModel,
+			failedSelector,
 			policy: failoverPolicy,
-			candidates: eligible.map(entry => ({ model: entry.candidate })),
-			requirements: {} as TurnRequirements,
+			// The routed selector is what distinguishes two upstream routes of one
+			// model id; without it a working route reads as the model that failed.
+			candidates: eligible.map(entry => ({
+				model: entry.candidate,
+				selector: formatModelStringWithRouting(entry.candidate),
+			})),
+			requirements: this.#turnRequirements(),
 			cooldowns,
+			// Empty on purpose. Chain position is what bounds re-selection here: the
+			// budget is reset on each switch and a wrapping chain re-enters itself
+			// deliberately. Recording attempts here would forbid exactly the
+			// cross-provider wrap-around an operator configured.
 			attempted: new Set<string>(),
-			now: Date.now(),
+			now,
 		});
-		if (!("model" in decision)) return false;
-		const pick = eligible.find(
-			entry => entry.candidate.provider === decision.model.provider && entry.candidate.id === decision.model.id,
-		);
+		if (!("model" in decision)) {
+			// Selection explained itself and nothing was eligible. That is the only
+			// record that a configured recovery route exists but cannot serve this
+			// turn, so it is logged rather than silently dropped.
+			logger.debug("Failover found no eligible candidate", {
+				failed: `${decisionFailedModel.provider}:${decisionFailedModel.id}`,
+				reason: decision.unavailable.kind,
+				freeRequired: decision.unavailable.kind === "exhausted" ? decision.unavailable.freeRequired : undefined,
+				blocked: decision.unavailable.kind === "exhausted" ? decision.unavailable.blocked : undefined,
+			});
+			return false;
+		}
+		// Match on the routed selector, not the model id: two upstream routes share
+		// both, and picking the wrong one would dispatch the route that just failed.
+		const pick = eligible.find(entry => formatModelStringWithRouting(entry.candidate) === decision.selector);
 		if (!pick) return false;
 		const apiKey = await this.#host.modelRegistry.getApiKey(pick.candidate, this.#host.sessionId());
 		if (!apiKey) return false;

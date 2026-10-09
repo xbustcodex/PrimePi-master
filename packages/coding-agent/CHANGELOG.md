@@ -5,6 +5,8 @@
 ### Fixed
 
 - Fixed follow-up hashline edits being rejected as anchored on lines "never displayed" after an earlier edit shifted those lines, when the replacement carries the anchored content; genuinely stale line numbers are still rejected ([#14254](https://github.com/can1357/oh-my-pi/pull/14254) by [@abilliontokens](https://github.com/abilliontokens)).
+- Fixed automatic model failover switching to a replacement that cannot carry the turn in progress. A turn holding images now skips routes that accept text only, instead of being dispatched to a model that would reject it.
+- Fixed automatic failover ignoring the order of your configured fallback chain. Recovery now follows the chain as written, including switching back across providers, instead of re-ranking candidates by provider.
 
 ## [18.6.0] - 2026-10-03
 

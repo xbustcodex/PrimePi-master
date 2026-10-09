@@ -41,17 +41,12 @@ import {
 	cfgTextVerbosity,
 	validateProviderMaxInFlightRequests,
 } from "./settings";
+import { timeoutSecondsToMs } from "@oh-my-pi/pi-ai/utils/stream-watchdog";
 
 /** Map `providers.openaiWebsockets` to the provider `preferWebsockets` hint (`auto` → model default). */
 export function resolveOpenAIWebsocketPreference(settings: Settings): boolean | undefined {
 	const setting = cfgProvidersOpenaiWebsockets.get(settings);
 	return setting === "on" ? true : setting === "off" ? false : undefined;
-}
-
-function timeoutSecondsToMs(value: number): number | undefined {
-	if (!Number.isFinite(value) || value < 0) return undefined;
-	if (value === 0) return 0;
-	return Math.max(1, Math.trunc(value * 1000));
 }
 
 /** Session wiring for Anthropic subscription wrap-up and slow mode (`providers.anthropic.slowMode`). */

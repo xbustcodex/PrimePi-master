@@ -43,8 +43,21 @@ export interface TurnRequirements {
 
 export interface FailoverCandidateInput {
 	model: Model<Api>;
+	/**
+	 * Full routed selector for `model`. Two upstream routes of one model id
+	 * (`provider/id@cerebras` vs `provider/id@chutes`) are different failures with
+	 * different recovery, so identity has to carry the route. The caller owns this
+	 * because the route lives in host-specific catalog policy; without it,
+	 * `provider:id` collapses a working route into "the model that just failed".
+	 */
+	selector?: string;
 	/** Set when the candidate is known to need credentials that are not present. */
 	credentialMissing?: boolean;
+}
+
+/** Identity used for de-duplication: the routed selector when given, else `provider:id`. */
+function identity(model: Model<Api>, selector: string | undefined): string {
+	return selector ?? `${model.provider}:${model.id}`;
 }
 
 export type UnavailableReason =
@@ -53,6 +66,8 @@ export type UnavailableReason =
 
 export interface FailoverDecision {
 	model: Model<Api>;
+	/** Routed selector of the chosen candidate, so the caller dispatches this exact route. */
+	selector: string;
 	/** Why this candidate was chosen, for the user-facing notice. */
 	reason: string;
 }
@@ -102,42 +117,13 @@ export function policyAllowsPaid(policy: FailoverPolicy): boolean {
 /**
  * Picks a replacement model, or explains why none is usable.
  *
- * `attempted` holds `provider:id` for every candidate already tried in this failover
- * cycle, which is what prevents oscillation.
+ * `attempted` holds the routed selector of every candidate already tried in this
+ * failover cycle, which is what prevents oscillation.
  */
-/**
- * The one-line notice shown when Pi switches models on its own.
- *
- * Automatic failover must never be silent: the user is being moved to a different
- * provider, possibly a different account, and needs to see it. Actual ids are used
- * rather than generic wording so the notice is actionable.
- *
- * `noticeKey` lets the caller de-duplicate: repeated failures of the same transition
- * in the same cycle should not spam.
- */
-export function failoverNotice(input: {
-	failed: Model<Api>;
-	reason: string;
-	scope: string;
-	replacement: Model<Api>;
-	resetAtMs?: number;
-}): { text: string; noticeKey: string } {
-	const until =
-		input.resetAtMs === undefined
-			? undefined
-			: `${new Date(input.resetAtMs).toISOString().replace("T", " ").slice(0, 16)}Z`;
-	const suffix = until === undefined ? "" : ` until ${until}`;
-	const text =
-		`${input.failed.id} [${input.failed.provider}] ${input.reason} (${input.scope}${suffix})` +
-		`\n→ continuing with ${input.replacement.id} [${input.replacement.provider}]`;
-	return {
-		text,
-		noticeKey: `${input.failed.provider}:${input.failed.id}->${input.replacement.provider}:${input.replacement.id}`,
-	};
-}
-
 export function selectFailoverCandidate(input: {
 	failed: Model<Api>;
+	/** Full routed selector for `failed`; see {@link FailoverCandidateInput.selector}. */
+	failedSelector?: string;
 	policy: FailoverPolicy;
 	candidates: readonly FailoverCandidateInput[];
 	requirements: TurnRequirements;
@@ -146,9 +132,9 @@ export function selectFailoverCandidate(input: {
 	now: number;
 }): FailoverDecision | { unavailable: UnavailableReason } {
 	const { failed, policy, candidates, requirements, cooldowns, attempted, now } = input;
+	const failedKey = identity(failed, input.failedSelector);
 	if (policy === "off") return { unavailable: { kind: "disabled" } };
 
-	const failedKey = `${failed.provider}:${failed.id}`;
 	// The active model is free, so recovery must not silently start spending money.
 	const freeRequired = failed.free === true && !policyAllowsPaid(policy);
 
@@ -158,7 +144,7 @@ export function selectFailoverCandidate(input: {
 
 	for (const candidate of candidates) {
 		const model = candidate.model;
-		const key = `${model.provider}:${model.id}`;
+		const key = identity(model, candidate.selector);
 		if (key === failedKey) continue;
 		considered++;
 		if (attempted.has(key)) {
@@ -169,8 +155,11 @@ export function selectFailoverCandidate(input: {
 			blocked.push(`${model.id} [${model.provider}] missing credentials`);
 			continue;
 		}
-		if (cooldowns.isModelUnavailable({ provider: model.provider, modelId: model.id, now })) {
-			const reasons = cooldowns.reasonsForModel({ provider: model.provider, modelId: model.id, now });
+		// The candidate's own route decides whether a recorded failure applies: a
+		// sibling upstream is still a working recovery after one route breaks.
+		const route = { provider: model.provider, modelId: model.id, baseUrl: model.baseUrl, now };
+		if (cooldowns.isModelUnavailable(route)) {
+			const reasons = cooldowns.reasonsForModel(route);
 			const scope = reasons[0]?.scope ?? "model";
 			blocked.push(`${model.id} [${model.provider}] unavailable (${scope})`);
 			continue;
@@ -186,6 +175,7 @@ export function selectFailoverCandidate(input: {
 		}
 		eligible.push({
 			model,
+			selector: key,
 			reason: model.free === true ? "free replacement route" : "compatible replacement route",
 		});
 	}
@@ -194,16 +184,10 @@ export function selectFailoverCandidate(input: {
 		return { unavailable: { kind: "exhausted", considered, freeRequired, blocked } };
 	}
 
-	// Prefer the same provider so a single-provider outage does not silently spread,
-	// then prefer anonymous access (fewest credentials to go wrong), then keep the
-	// runtime's own ordering as the final tie-break for determinism.
-	eligible.sort((a, b) => {
-		const providerDelta = Number(b.model.provider === failed.provider) - Number(a.model.provider === failed.provider);
-		if (providerDelta !== 0) return providerDelta;
-		const accessDelta = Number(b.model.access === "anonymous") - Number(a.model.access === "anonymous");
-		if (accessDelta !== 0) return accessDelta;
-		return 0;
-	});
-
+	// The surviving list keeps the order the caller built it in, which is the
+	// operator's configured fallback chain. Re-ranking by provider or credential
+	// need would silently override that configuration: a chain that deliberately
+	// moves cross-provider must be allowed to do so even when a same-provider
+	// sibling is still listed.
 	return eligible[0];
 }

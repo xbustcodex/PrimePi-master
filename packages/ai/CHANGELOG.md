@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a stalled model stream being treated as an unrecoverable provider error. A stream interrupted by the first-event or idle watchdog is now retried, recorded against the model's availability cooldown, and eligible for automatic failover to another route.
+- Fixed a failure on one upstream route taking the model's other routes out of service. Availability cooldowns now record which route failed, so automatic failover can still move to a sibling route of the same model.
+
 ## [18.6.0] - 2026-10-03
 
 ### Fixed

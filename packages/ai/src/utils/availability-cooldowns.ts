@@ -83,12 +83,18 @@ export class AvailabilityCooldowns {
 	 * Checks the model/route key plus every provider-wide and pool-wide key that
 	 * could apply, so a pool exclusion excludes all of its models.
 	 */
-	isModelUnavailable(input: { provider: string; modelId: string; now: number }): boolean {
+	isModelUnavailable(input: { provider: string; modelId: string; baseUrl?: string; now: number }): boolean {
 		return this.reasonsForModel(input).length > 0;
 	}
 
-	/** Entries that currently apply to a model, for user-facing explanations. */
-	reasonsForModel(input: { provider: string; modelId: string; now: number }): UnavailabilityEntry[] {
+	/**
+	 * Entries that currently apply to a model, for user-facing explanations.
+	 *
+	 * `baseUrl` narrows the match to one upstream route. A model served through
+	 * several routes is only excluded when the route that failed is the one being
+	 * asked about; without it a single bad route would exclude the whole model.
+	 */
+	reasonsForModel(input: { provider: string; modelId: string; baseUrl?: string; now: number }): UnavailabilityEntry[] {
 		const found: UnavailabilityEntry[] = [];
 		const now = input.now;
 		for (const [key, entry] of this.entries) {
@@ -96,7 +102,7 @@ export class AvailabilityCooldowns {
 				this.entries.delete(key);
 				continue;
 			}
-			if (this.appliesTo(entry, input.provider, input.modelId)) found.push(entry);
+			if (this.appliesTo(entry, input.provider, input.modelId, input.baseUrl)) found.push(entry);
 		}
 		return found.sort((a, b) => a.untilMs - b.untilMs);
 	}
@@ -114,8 +120,13 @@ export class AvailabilityCooldowns {
 	 * matching it by prefix required a separator that never appears, which meant a
 	 * provider-scoped outage silently excluded nothing.
 	 */
-	private appliesTo(entry: UnavailabilityEntry, provider: string, modelId: string): boolean {
-		if (entry.scope === "model" || entry.scope === "route") {
+	private appliesTo(entry: UnavailabilityEntry, provider: string, modelId: string, baseUrl?: string): boolean {
+		if (entry.scope === "route") {
+			// A route entry names the upstream that failed; it applies only when the
+			// model being asked about is served by that same upstream.
+			return baseUrl !== undefined && entry.key === `route:${provider}:${modelId}:${baseUrl}`;
+		}
+		if (entry.scope === "model") {
 			return entry.key === `model:${provider}:${modelId}`;
 		}
 		if (entry.scope === "provider") {

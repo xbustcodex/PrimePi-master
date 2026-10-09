@@ -1,5 +1,4 @@
 import { resolveExtraCa, withExtraCaInit } from "@oh-my-pi/pi-utils";
-import { withWatchdogFetch } from "./stream-watchdog";
 import { coworkFetch } from "../providers/cowork-fetch";
 import { withInferenceUserAgent } from "../providers/inference-headers";
 import type { Api, FetchImpl, Model } from "../types";
@@ -46,19 +45,6 @@ export function transportFetch(model: Model<Api>, fetchImpl: FetchImpl | undefin
 
 /** Options-bag form of {@link transportFetch}; returns `options` untouched when its fetch is already built. */
 export function withTransportFetch<T extends { fetch?: FetchImpl }>(model: Model<Api>, options: T): T {
-	let fetch = transportFetch(model, options.fetch);
-	const opts = options as { streamFirstEventTimeoutMs?: number; streamIdleTimeoutMs?: number };
-	const firstMs =
-		typeof opts.streamFirstEventTimeoutMs === "number" && opts.streamFirstEventTimeoutMs > 0
-			? Math.max(1, Math.trunc(opts.streamFirstEventTimeoutMs))
-			: undefined;
-	const idleMs =
-		typeof opts.streamIdleTimeoutMs === "number" && opts.streamIdleTimeoutMs > 0
-			? Math.max(1, Math.trunc(opts.streamIdleTimeoutMs))
-			: undefined;
-	if (firstMs !== undefined || idleMs !== undefined) {
-		const watched = withWatchdogFetch(fetch, { firstEventTimeoutMs: firstMs, idleTimeoutMs: idleMs });
-		if (watched !== null) fetch = watched;
-	}
+	const fetch = transportFetch(model, options.fetch);
 	return fetch === options.fetch ? options : { ...options, fetch };
 }
