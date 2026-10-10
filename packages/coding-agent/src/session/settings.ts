@@ -1441,3 +1441,35 @@ export const cfgThinkingBudgets = combine({
 	xhigh: cfgThinkingBudgetsXhigh,
 	max: cfgThinkingBudgetsMax,
 });
+
+// Project trust
+export const cfgDefaultProjectTrust = register({
+	id: "projectTrust.default",
+	type: "enum",
+	values: ["ask", "always", "never"] as const,
+	default: "ask",
+	globalOnly: true,
+	ui: {
+		tab: "interaction",
+		group: "Project Trust",
+		label: "Default Project Trust",
+		description: "Fallback behavior when no saved trust decision exists for a project",
+		options: [
+			{ value: "ask", label: "Ask", description: "Prompt the user when a project requires trust" },
+			{ value: "always", label: "Always trust", description: "Automatically trust all projects" },
+			{ value: "never", label: "Never trust", description: "Never automatically trust projects" },
+		],
+	},
+});
+
+export const cfgProjectTrustEnabled = register({
+	id: "projectTrust.enabled",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "interaction",
+		group: "Project Trust",
+		label: "Project Trust Gating",
+		description: "Require explicit trust for projects with local config/extensions/skills",
+	},
+});

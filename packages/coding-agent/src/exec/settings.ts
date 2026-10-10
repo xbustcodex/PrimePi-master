@@ -126,7 +126,7 @@ export const cfgBashPatterns = register({
 		group: "Bash",
 		label: "Bash Approval Patterns",
 		description:
-			"Ordered bash command approval rules. Each item has match and approval fields; only '*' wildcards are supported.",
+			"Ordered bash command approval rules. Each item has match, approval, and optional chainOnly fields; only '*' wildcards are supported. chainOnly rules apply only to the complete && chain, not per segment.",
 	},
 });
 

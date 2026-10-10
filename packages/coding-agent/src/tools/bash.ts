@@ -237,6 +237,7 @@ type BashPatternApproval = "allow" | "deny" | "prompt";
 interface BashApprovalPatternRule {
 	match: string;
 	approval: BashPatternApproval;
+	chainOnly?: boolean;
 }
 
 function normalizeBashApprovalPattern(value: string): string {
@@ -266,7 +267,11 @@ function getBashApprovalPatternRules(value: unknown): BashApprovalPatternRule[] 
 			if (typeof record.match !== "string") return undefined;
 			const match = normalizeBashApprovalPattern(record.match);
 			const approval = normalizeBashPatternApproval(record.approval);
-			return match.length > 0 && approval ? { match, approval } : undefined;
+			const chainOnly = record.chainOnly === true;
+			if (!approval || match.length === 0) return undefined;
+			const rule: BashApprovalPatternRule = { match, approval };
+			if (chainOnly) rule.chainOnly = true;
+			return rule;
 		})
 		.filter((rule): rule is BashApprovalPatternRule => !!rule);
 }
@@ -301,7 +306,16 @@ function commandSegmentMatchesBashApprovalPattern(command: string, pattern: stri
 // vouch for the ENTIRE command and never rides a compound line (shell control
 // syntax could smuggle an unsafe segment past a narrow allow), while `deny` and
 // `prompt` fire on any matching segment so they mean what they appear to.
+// `chainOnly` rules apply only to the complete command, not per segment.
 function bashApprovalRuleMatches(command: string, rule: BashApprovalPatternRule): boolean {
+	if (rule.chainOnly) {
+		// chainOnly rules only match the complete command
+		if (rule.approval === "allow") {
+			if (hasBashApprovalShellControl(command)) return false;
+			return commandMatchesBashApprovalPattern(command, rule.match);
+		}
+		return commandMatchesBashApprovalPattern(command, rule.match);
+	}
 	if (rule.approval === "allow") {
 		if (hasBashApprovalShellControl(command)) return false;
 		return commandMatchesBashApprovalPattern(command, rule.match);
@@ -509,44 +523,68 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			? this.session.settings.getShellConfig().shell
 			: undefined;
 		const compoundSegments = shell && isPosixShell(shell) ? extractLiteralAndChainSegments(command) : null;
-		// Segment rules keep their ordered first-match semantics. Restrictions
-		// matching only the complete chain are aggregated separately: retain the
-		// first prompt, but keep scanning because any later deny takes precedence.
-		let patternRule: BashApprovalPatternRule | undefined;
+
 		if (compoundSegments) {
+			// Phase 1: Check for implicit chain-only rules (match complete command but no segment)
+			// These are rules that match the complete command but NO individual segment
+			let chainOnlyPromptRule: BashApprovalPatternRule | undefined;
 			for (const rule of patternRules) {
-				if (
-					rule.approval !== "allow" &&
-					commandMatchesBashApprovalPattern(command, rule.match) &&
-					!compoundSegments.some(segment => commandSegmentMatchesBashApprovalPattern(segment.text, rule.match))
-				) {
-					if (rule.approval === "deny") {
-						patternRule = rule;
-						break;
+				if (rule.chainOnly === true) {
+					// Explicit chainOnly rules only apply to complete command
+					if (bashApprovalRuleMatches(command, rule)) {
+						if (rule.approval === "deny") {
+							return {
+								tier: "exec",
+								override: true,
+								policy: "deny",
+								reason: `Blocked by bash pattern: ${rule.match}`,
+							};
+						}
+						if (rule.approval === "prompt") {
+							chainOnlyPromptRule ??= rule;
+						}
 					}
-					patternRule ??= rule;
+					continue;
+				}
+
+				// Implicit chain-only: matches complete command but no segment
+				const matchesComplete = bashApprovalRuleMatches(command, rule);
+				const matchesSegment = compoundSegments.some(segment => bashApprovalRuleMatches(segment.text, rule));
+				const isImplicitChainOnly = matchesComplete && !matchesSegment;
+
+				if (isImplicitChainOnly) {
+					if (rule.approval === "deny") {
+						return {
+							tier: "exec",
+							override: true,
+							policy: "deny",
+							reason: `Blocked by bash pattern: ${rule.match}`,
+						};
+					}
+					if (rule.approval === "prompt") {
+						chainOnlyPromptRule ??= rule;
+					}
 				}
 			}
-		} else {
-			patternRule = findBashApprovalPatternRule(command, patternRules);
-		}
-		if (patternRule?.approval === "deny") {
-			return {
-				tier: "exec",
-				override: true,
-				policy: "deny",
-				reason: `Blocked by bash pattern: ${patternRule.match}`,
-			};
-		}
-		const criticalCommand = command !== "" && CRITICAL_BASH_PATTERNS.some(pattern => pattern.test(command));
-		if (!compoundSegments && criticalCommand) {
-			return { tier: "exec", override: true, reason: "Critical pattern detected" };
-		}
-		if (compoundSegments) {
-			let promptRule: BashApprovalPatternRule | undefined = patternRule;
+
+			if (chainOnlyPromptRule) {
+				return {
+					tier: "exec",
+					override: true,
+					policy: "prompt",
+					reason: `Prompt required by bash pattern: ${chainOnlyPromptRule.match}`,
+				};
+			}
+
+			// Phase 2: Check segments for deny/prompt (ordered first-match per segment)
+			let promptRule: BashApprovalPatternRule | undefined;
 			let hasUnmatchedSegment = false;
 			for (const segment of compoundSegments) {
-				const segmentRule = findBashApprovalPatternRule(segment.text, patternRules);
+				// Use ordered first-match for each segment (like non-compound)
+				const segmentRule = findBashApprovalPatternRule(
+					segment.text,
+					patternRules.filter(r => !r.chainOnly),
+				);
 				if (segmentRule?.approval === "deny") {
 					return {
 						tier: "exec",
@@ -555,8 +593,16 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						reason: `Blocked by bash pattern: ${segmentRule.match}`,
 					};
 				}
-				if (segmentRule?.approval === "prompt") promptRule ??= segmentRule;
+				if (segmentRule?.approval === "prompt") {
+					promptRule ??= segmentRule;
+				}
 				if (!segmentRule) hasUnmatchedSegment = true;
+
+				// Safety net: check critical patterns on each segment regardless of user patterns
+				const literalCommand = segment.argv.join(" ");
+				if (CRITICAL_BASH_PATTERNS.some(pattern => pattern.test(literalCommand))) {
+					return { tier: "exec", override: true, reason: "Critical pattern detected" };
+				}
 			}
 			if (promptRule) {
 				return {
@@ -566,16 +612,20 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					reason: `Prompt required by bash pattern: ${promptRule.match}`,
 				};
 			}
-			for (const segment of compoundSegments) {
-				const literalCommand = segment.argv.join(" ");
-				if (criticalCommand || CRITICAL_BASH_PATTERNS.some(pattern => pattern.test(literalCommand))) {
-					return { tier: "exec", override: true, reason: "Critical pattern detected" };
-				}
-			}
 			// Unmatched segments retain the standalone tool-policy and mode fallback.
 			return hasUnmatchedSegment ? "exec" : { tier: "write", policy: "allow" };
 		}
-		if (patternRule?.approval === "allow") return { tier: "write", policy: "allow" };
+
+		// Non-compound command: check user patterns first
+		const patternRule = findBashApprovalPatternRule(command, patternRules);
+		if (patternRule?.approval === "deny") {
+			return {
+				tier: "exec",
+				override: true,
+				policy: "deny",
+				reason: `Blocked by bash pattern: ${patternRule.match}`,
+			};
+		}
 		if (patternRule?.approval === "prompt") {
 			return {
 				tier: "exec",
@@ -584,8 +634,21 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				reason: `Prompt required by bash pattern: ${patternRule.match}`,
 			};
 		}
+		if (patternRule?.approval === "allow") {
+			// Even if user allows, check critical patterns as safety net
+			if (command !== "" && CRITICAL_BASH_PATTERNS.some(pattern => pattern.test(command))) {
+				return { tier: "exec", override: true, reason: "Critical pattern detected" };
+			}
+			return { tier: "write", policy: "allow" };
+		}
+
+		// No user pattern matched: check critical patterns as fallback
+		if (command !== "" && CRITICAL_BASH_PATTERNS.some(pattern => pattern.test(command))) {
+			return { tier: "exec", override: true, reason: "Critical pattern detected" };
+		}
 		return "exec";
 	};
+
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const rawCommand = (args as Partial<BashToolInput>).command;
 		const command = typeof rawCommand === "string" ? rawCommand : "(missing)";

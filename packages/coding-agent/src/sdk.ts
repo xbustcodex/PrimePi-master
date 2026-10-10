@@ -34,6 +34,7 @@ import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identit
 import type { Component } from "@oh-my-pi/pi-tui";
 import { $env } from "@oh-my-pi/pi-utils/env";
 import { getAgentDir, getModelDbPath, getProjectDir } from "@oh-my-pi/pi-utils/dirs";
+import { ProjectTrustStore, resolveProjectTrusted } from "./config/project-trust";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import * as prompt from "@oh-my-pi/pi-utils/prompt";
@@ -335,6 +336,8 @@ import {
 	cfgTierAnthropic,
 	cfgTierGoogle,
 	cfgTierOpenai,
+	cfgDefaultProjectTrust,
+	cfgProjectTrustEnabled,
 } from "./session/settings";
 import { cfgInterruptMode } from "./modes/settings";
 import { cfgFollowUpMode } from "./modes/settings";
@@ -2556,6 +2559,18 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// re-bind under their own `CustomToolAPI` while skipping the FS scan.
 		toolSession.customToolPaths = customToolPaths;
 
+		// Project trust gate: check if project is trusted before loading project-local extensions/config
+		const projectTrusted = cfgProjectTrustEnabled.get(settings)
+			? await resolveProjectTrusted({
+					cwd,
+					trustStore: new ProjectTrustStore(agentDir),
+					defaultProjectTrust: cfgDefaultProjectTrust.get(settings),
+					extensionsResult: undefined, // extensions not loaded yet
+					// No ProjectTrustContext provided: SDK uses default project trust setting
+					// CLI can override with a full context for interactive prompting
+				})
+			: true;
+
 		// Load extensions. Four paths:
 		//   1. `preloadedExtensions` (CLI): caller already loaded — reuse the
 		//      Extension instances. Shallow-clone `extensions` so the inline
@@ -2566,7 +2581,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		//      evaluating the same module graph again.
 		//   3. `preloadedExtensionPaths`: compatibility fallback for callers that
 		//      only have paths; imports and binds them for this session.
-		//   4. No preload: run the full session discovery.
+		//   4. No preload: run the full session discovery (only if project trusted).
 		// `disableExtensionDiscovery` is honored implicitly: a caller that set
 		// the flag and pre-resolved the result already reflects that choice.
 		let extensionPaths: string[];
@@ -2602,7 +2617,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			for (const { path, error } of extensionsResult.errors) {
 				logger.error("Failed to load extension", { path, error });
 			}
-		} else {
+		} else if (projectTrusted) {
 			extensionPaths = await logger.time("discoverSessionExtensionPaths", () =>
 				discoverSessionExtensionPaths(options, cwd, settings),
 			);
@@ -2610,6 +2625,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			for (const { path, error } of extensionsResult.errors) {
 				logger.error("Failed to load extension", { path, error });
 			}
+		} else {
+			// Project not trusted: skip project-local extension discovery.
+			// Only load explicitly configured extensions (already handled above).
+			// Still call loadExtensions with empty paths to get a proper runtime.
+			extensionPaths = [];
+			extensionsResult = await logger.time("loadExtensions", loadExtensions, [], cwd, eventBus);
+			logger.info("Project not trusted; skipping project-local extension discovery", { cwd });
 		}
 		// Forward the source-path list (NOT the loaded instances) so subagents
 		// rebuild their own session-scoped extensions.
@@ -3241,6 +3263,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				depth: taskDepth,
 				...(options.parentAgentId ? { parentId: options.parentAgentId } : {}),
 			}),
+			projectTrusted,
 		);
 
 		credentialDisabledTarget = extensionRunner;
