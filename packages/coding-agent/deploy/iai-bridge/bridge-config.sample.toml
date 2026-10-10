@@ -1,0 +1,25 @@
+# Sample bridge configuration. Copy to /srv/buster/iai-memory/bridge-config.toml
+# and adjust. NEVER commit a file containing a bearer token.
+[server]
+# Loopback for local testing; LAN address only with [tls] configured.
+bind = "127.0.0.1"
+port = 8420
+
+[tls]
+# Required for any non-loopback bind. Paths live outside the repository.
+# cert_path = "/srv/buster/iai-memory/tls/bridge.crt"
+# key_path = "/srv/buster/iai-memory/tls/bridge.key"
+
+[store]
+path = "/srv/buster/iai-memory"
+backups = "/srv/storage/iai-backups"
+
+[auth]
+# Restricted token file (0600, adzs:adzs), written by provision-token.py.
+token_file = "/srv/buster/iai-memory/.bridge-token"
+# Hours the previous token stays valid after rotation.
+grace_hours = 24
+
+[limits]
+max_recall = 10
+request_timeout_sec = 30

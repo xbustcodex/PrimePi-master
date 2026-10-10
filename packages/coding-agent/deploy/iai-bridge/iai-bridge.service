@@ -1,0 +1,30 @@
+# Proposed systemd unit for the IAI long-term memory bridge on buster-server.
+# NOT YET INSTALLED — requires explicit deployment approval before:
+#   sudo cp iai-bridge.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now iai-bridge.service
+[Unit]
+Description=IAI long-term memory bridge
+Documentation=https://github.com/xbustcodex/iai-personal-memory-engine
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=adzs
+Group=adzs
+WorkingDirectory=/srv/buster/iai-memory
+Environment=IAI_MCP_STORE=/srv/buster/iai-memory
+Environment=IAI_BRIDGE_TOKEN_FILE=/srv/buster/iai-memory/.bridge-token
+Environment=IAI_BRIDGE_CONFIG=/srv/buster/iai-memory/bridge-config.toml
+ExecStart=/usr/bin/python3 /srv/buster/iai-memory/bridge/iai_bridge_server.py --config /srv/buster/iai-memory/bridge-config.toml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/buster/iai-memory /srv/storage/iai-backups
+
+[Install]
+WantedBy=multi-user.target
