@@ -12,3 +12,6 @@ export * from "./off-backend";
 export * from "./resolve";
 export * from "./runtime";
 export * from "./types";
+export * from "./iai-backend";
+export * from "./iai-types";
+export * from "./iai-client";

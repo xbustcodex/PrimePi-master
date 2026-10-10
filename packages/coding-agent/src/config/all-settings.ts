@@ -10,6 +10,7 @@ import * as advisorSettings from "../advisor/settings";
 import * as configModelSettings from "./model-settings";
 import * as sessionContextSettings from "../session/context-settings";
 import * as memoryBackendSettings from "../memory-backend/settings";
+import * as iaiSettings from "../memory-backend/iai-settings";
 import * as memoriesSettings from "../memories/settings";
 import * as sharpshooterSettings from "../sharpshooter/settings";
 import * as autolearnSettings from "../autolearn/settings";
@@ -49,6 +50,7 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	advisorSettings,
 	sessionContextSettings,
 	memoryBackendSettings,
+	iaiSettings,
 	memoriesSettings,
 	sharpshooterSettings,
 	autolearnSettings,

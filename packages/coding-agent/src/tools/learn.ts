@@ -5,6 +5,7 @@ import { sanitizeSkillName, writeManagedSkill } from "../autolearn/managed-skill
 import { isNameClaimedByAuthoredSkill } from "../extensibility/skills";
 import { isHindsightConfigured, loadHindsightConfig } from "../hindsight/config";
 import { localBackend } from "../memory-backend/local-backend";
+import { IaiMcpClient } from "../memory-backend/iai-client";
 import learnDescription from "../prompts/tools/learn.md" with { type: "text" };
 import type { ToolSession } from ".";
 
@@ -71,7 +72,7 @@ export class LearnTool implements AgentTool<LearnSchema> {
 	static createIf(session: ToolSession): LearnTool | null {
 		if (!cfgAutolearnEnabled.get(session.settings)) return null;
 		const backend = cfgMemoryBackend.get(session.settings);
-		if (backend !== "hindsight" && backend !== "mnemopi" && backend !== "local") return null;
+		if (backend !== "hindsight" && backend !== "mnemopi" && backend !== "local" && backend !== "iai") return null;
 		if (backend === "hindsight" && !isHindsightConfigured(loadHindsightConfig(session.settings))) return null;
 		return new LearnTool(session);
 	}
@@ -124,6 +125,28 @@ export class LearnTool implements AgentTool<LearnSchema> {
 			);
 			if (!result || result.stored === 0) {
 				throw new Error("Lesson was empty after sanitization; nothing stored.");
+			}
+		} else if (backend === "iai") {
+			const client = new IaiMcpClient();
+			try {
+				await client.connect();
+			} catch (error) {
+				throw new Error(`IAI backend is not available: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			try {
+				const result = await client.capture({
+					content: params.memory,
+					context: params.context,
+					source: "coding-agent-learn",
+					importance: 0.8,
+					tags: ["coding-agent", "learn"],
+					metadata: { cwd: this.session.cwd },
+				});
+				if (!result?.stored) {
+					throw new Error("Lesson was empty after sanitization; nothing stored.");
+				}
+			} finally {
+				await client.close();
 			}
 		} else {
 			const state = this.session.getHindsightSessionState?.();
