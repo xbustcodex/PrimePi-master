@@ -23,6 +23,8 @@ export type IaiBridgeMessageKind =
 	| "health-result"
 	| "error";
 
+export const MAX_ARCHIVE_CONTENT_CHARS = 262_144;
+
 export interface IaiBridgeArchiveBody {
 	key: string;
 	bank: string;
@@ -32,6 +34,8 @@ export interface IaiBridgeArchiveBody {
 	bytes: number;
 	idempotencyKey: string;
 	version: number;
+	/** Lesson content; required for durable archival, bounded to keep frames small. */
+	content?: string;
 }
 
 export interface IaiBridgeArchiveAckBody {
@@ -152,25 +156,31 @@ export function parseBridgeEnvelope(frame: string): BridgeParseResult {
 /** Validate an archive body. */
 export function validateArchiveBody(body: unknown): body is IaiBridgeArchiveBody {
 	if (!isRecord(body)) return false;
-	return (
-		typeof body.key === "string" &&
-		body.key.length > 0 &&
-		typeof body.bank === "string" &&
-		body.bank.length > 0 &&
-		typeof body.projectId === "string" &&
-		body.projectId.length > 0 &&
-		typeof body.sessionId === "string" &&
-		typeof body.contentHash === "string" &&
-		body.contentHash.length > 0 &&
-		typeof body.bytes === "number" &&
-		Number.isFinite(body.bytes) &&
-		body.bytes >= 0 &&
-		typeof body.idempotencyKey === "string" &&
-		body.idempotencyKey.length > 0 &&
-		typeof body.version === "number" &&
-		Number.isInteger(body.version) &&
-		body.version >= 0
-	);
+	if (
+		typeof body.key !== "string" ||
+		body.key.length === 0 ||
+		typeof body.bank !== "string" ||
+		body.bank.length === 0 ||
+		typeof body.projectId !== "string" ||
+		body.projectId.length === 0 ||
+		typeof body.sessionId !== "string" ||
+		typeof body.contentHash !== "string" ||
+		body.contentHash.length === 0 ||
+		typeof body.bytes !== "number" ||
+		!Number.isFinite(body.bytes) ||
+		body.bytes < 0 ||
+		typeof body.idempotencyKey !== "string" ||
+		body.idempotencyKey.length === 0 ||
+		typeof body.version !== "number" ||
+		!Number.isInteger(body.version) ||
+		body.version < 0
+	) {
+		return false;
+	}
+	if (body.content !== undefined) {
+		if (typeof body.content !== "string" || body.content.length > MAX_ARCHIVE_CONTENT_CHARS) return false;
+	}
+	return true;
 }
 
 /** Validate a recall body (bounded limit). */

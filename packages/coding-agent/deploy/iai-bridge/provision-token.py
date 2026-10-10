@@ -51,7 +51,7 @@ def _write_restricted(path: str, payload: dict) -> None:
             handle.write("\n")
     finally:
         try:
-            os.fchmod(path, 0o600)
+            os.chmod(path, 0o600)
         except OSError:
             pass
     mode = stat.S_IMODE(os.stat(path).st_mode)

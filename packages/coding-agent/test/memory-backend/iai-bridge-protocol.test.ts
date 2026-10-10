@@ -29,6 +29,7 @@ describe("iai bridge protocol", () => {
 		expect(parsed.ok).toBe(true);
 		expect(parsed.envelope?.kind).toBe("archive");
 		expect(validateArchiveBody(parsed.envelope?.body)).toBe(true);
+		expect(validateArchiveBody({ ...(parsed.envelope?.body as object), content: "x".repeat(300_000) })).toBe(false);
 	});
 
 	it("rejects unauthenticated callers", () => {
