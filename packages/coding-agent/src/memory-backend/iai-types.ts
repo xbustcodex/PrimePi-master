@@ -1,7 +1,6 @@
 /**
  * IAI-specific types for the IAI memory backend integration.
  */
-import type { MemoryBackendSearchOptions, MemoryBackendSearchResult, MemoryBackendSearchItem } from "./types";
 
 /** IAI MCP tool names */
 export const IAI_MCP_TOOLS = [
@@ -122,59 +121,4 @@ export interface IaiDaemonStatus {
 	database?: string;
 	message?: string;
 	error?: string;
-}
-
-/** IAI project scoping mode */
-export type IaiScoping = "per-project" | "per-project-tagged" | "global";
-
-/** IAI backend configuration from settings */
-export interface IaiBackendConfig {
-	/** Bank name for retention */
-	bank?: string;
-	/** Base bank for global/shared memories */
-	baseBank?: string;
-	/** Global bank for per-project-tagged scoping */
-	globalBank?: string;
-	/** Explicit recall banks */
-	recallBanks?: string[];
-	/** Scoping mode */
-	scoping?: IaiScoping;
-	/** Auto-recall on session start */
-	autoRecall?: boolean;
-	/** Auto-retain on session end */
-	autoRetain?: boolean;
-	/** Retain every N user turns */
-	retainEveryNTurns?: number;
-	/** Overlap turns for windowed retain */
-	retainOverlapTurns?: number;
-	/** Retain mode: full-session or windowed */
-	retainMode?: "full-session" | "windowed";
-	/** Retain context prefix */
-	retainContext?: string;
-	/** Recall budget (tokens) */
-	recallBudget?: number;
-	/** Recall max tokens */
-	recallMaxTokens?: number;
-	/** Recall context turns */
-	recallContextTurns?: number;
-	/** Recall max query chars */
-	recallMaxQueryChars?: number;
-	/** Recall prompt preamble */
-	recallPromptPreamble?: string;
-	/** Mental models enabled */
-	mentalModelsEnabled?: boolean;
-	/** Mental model auto-seed */
-	mentalModelAutoSeed?: boolean;
-	/** Mental model max render chars */
-	mentalModelMaxRenderChars?: number;
-	/** Proactive linking */
-	proactiveLinking?: boolean;
-	/** Polyphonic recall */
-	polyphonicRecall?: boolean;
-	/** Enhanced recall */
-	enhancedRecall?: boolean;
-	/** Working memory TTL hours */
-	workingMemoryTtlHours?: number;
-	/** Provider options for embeddings */
-	providerOptions?: Record<string, unknown>;
 }
