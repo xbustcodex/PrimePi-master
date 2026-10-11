@@ -50,10 +50,22 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=False)
 
     manifest: list[str] = []
-    for db in sorted(Path(args.store).glob("*.db")):
-        target = out_dir / db.name
+    # Only engine data files (*.sqlite3 via the online backup API,
+    # *.hnsw vector indexes as consistent copies), preserving relative
+    # paths. Bearer tokens (.bridge-token), private keys (.crypto.key),
+    # lock files, sockets, and WAL/SHM sidecars are never included.
+    for db in sorted(Path(args.store).rglob("*.sqlite3")):
+        rel = db.relative_to(args.store)
+        target = out_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
         _backup_db(db, target)
-        manifest.append(f"{_sha256(target)}  {db.name}")
+        manifest.append(f"{_sha256(target)}  {rel.as_posix()}")
+    for index in sorted(Path(args.store).rglob("*.hnsw")):
+        rel = index.relative_to(args.store)
+        target = out_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(index.read_bytes())
+        manifest.append(f"{_sha256(target)}  {rel.as_posix()}")
 
     (out_dir / "SHA256SUMS").write_text("\n".join(manifest) + "\n", encoding="utf-8")
     print(f"backup complete: {out_dir} ({len(manifest)} databases)")

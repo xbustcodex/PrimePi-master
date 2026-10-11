@@ -218,23 +218,93 @@ class IaiEngine(Engine):
         }
         with self._lock:
             result = dispatch(self._store, "memory_capture", params)
-        return require_durable_archive(result)
+            durable = require_durable_archive(result)
+            # The capture handler does not forward grouping tags, so scope
+            # tags are applied here, inside the same lock, before any ack.
+            # Tags are load-bearing for project isolation: a failure here
+            # must refuse the acknowledgement, never silently store untagged.
+            self._apply_scope_tags(
+                durable["record_id"], body.get("bank"), body.get("projectId"), body.get("key")
+            )
+        return durable
+
+    def _apply_scope_tags(self, record_id: str, bank: Any, project: Any, key: Any = None) -> None:
+        from uuid import UUID
+
+        tags = ["bridge-archive"]
+        if isinstance(bank, str) and bank:
+            tags.append(f"bank:{bank}")
+        if isinstance(project, str) and project:
+            tags.append(f"project:{project}")
+        if isinstance(key, str) and key:
+            tags.append(f"key:{key}")
+        try:
+            applied = self._store.add_tags(UUID(record_id), tags)
+        except Exception as exc:
+            raise EngineError(f"scope tags could not be applied: {exc}") from exc
+        if not applied:
+            raise EngineError("scope tags were not applied by the store")
 
     def recall(self, body: dict) -> dict:
         try:
             from iai_mcp.core import dispatch
         except ImportError as exc:
             raise EngineError(f"iai_mcp.core is unavailable: {exc}") from exc
-        params = {
-            "query": body["query"],
-            "bank": body.get("bank"),
-            "limit": body.get("limit", 10),
-        }
+        # memory_search takes {query, k}; bank/project scoping is enforced
+        # below by tag: bridge archives always carry bank:<bank> and
+        # project:<id> tags, and only matching records are returned.
+        limit = body.get("limit", 10)
+        params = {"query": body["query"], "k": limit if isinstance(limit, int) else 10}
         with self._lock:
             result = dispatch(self._store, "memory_search", params)
-        if not isinstance(result, dict):
+        if not isinstance(result, dict) or not isinstance(result.get("hits"), list):
             raise EngineError("engine returned malformed recall result")
-        return result
+        bank = body.get("bank")
+        project = body.get("projectId")
+        wanted = {f"bank:{bank}", f"project:{project}"} if bank and project else set()
+        items = []
+        for hit in result["hits"]:
+            if not isinstance(hit, dict):
+                continue
+            record_id = hit.get("record_id")
+            if not isinstance(record_id, str):
+                continue
+            bridge_key = self._scoped_bridge_key(record_id, wanted) if wanted else None
+            # Without a scope filter every hit passes through; with one, only
+            # records carrying the matching bridge tags are returned.
+            if wanted and bridge_key is None:
+                continue
+            items.append(
+                {
+                    "key": record_id,
+                    "bridgeKey": bridge_key,
+                    "snippet": str(hit.get("surface", ""))[:500],
+                    "score": float(hit.get("score", hit.get("cos", 0.0)) or 0.0),
+                }
+            )
+            if len(items) >= (limit if isinstance(limit, int) else 10):
+                break
+        return {"results": items}
+
+    def _scoped_bridge_key(self, record_id: str, wanted: set) -> str | None:
+        """Bridge key of a record when its tags satisfy the scope, else None."""
+        try:
+            from uuid import UUID
+
+            record = self._store.get(UUID(record_id))
+        except Exception:
+            return None
+        if record is None:
+            return None
+        tags = set(getattr(record, "tags", None) or [])
+        # Strict subset: a record must carry EVERY wanted scope tag. A
+        # shared bank alone must never leak a sibling project's memories.
+        if not wanted <= tags:
+            return None
+        for tag in tags:
+            if tag.startswith("key:"):
+                return tag[4:]
+        return None
 
 
 class MemoryEngine(Engine):
@@ -332,8 +402,12 @@ class BridgeServer:
         result = self.engine.recall(body)
         results = result.get("results", []) if isinstance(result, dict) else []
         items = [
-            {"key": r.get("key", ""), "snippet": str(r.get("snippet", r.get("content", "")))[:500],
-             "score": float(r.get("score", 0.0))}
+            {
+                "key": r.get("key", ""),
+                "bridgeKey": r.get("bridgeKey", r.get("bridge_key")),
+                "snippet": str(r.get("snippet", r.get("content", "")))[:500],
+                "score": float(r.get("score", 0.0)),
+            }
             for r in results[: body.get("limit", 10)]
             if isinstance(r, dict)
         ]
@@ -391,9 +465,9 @@ def serve_forever(config_path: str, token_file: str) -> None:
             except (OSError, ValueError):
                 return
 
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
     with socketserver.ThreadingTCPServer((config["bind"], config["port"]), Handler) as httpd:
         httpd.daemon_threads = True
-        httpd.allow_reuse_address = True
         if config["cert"]:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.load_cert_chain(config["cert"], config["key"])

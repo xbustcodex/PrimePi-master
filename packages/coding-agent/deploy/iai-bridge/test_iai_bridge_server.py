@@ -133,6 +133,23 @@ class BridgeServerTest(unittest.TestCase):
             {"status": "reinforced", "record_id": "abc"},
         )
 
+    def test_scope_filter_uses_durable_key_tags(self) -> None:
+        from iai_bridge_server import IaiEngine
+
+        class StubRecord:
+            def __init__(self, tags):
+                self.tags = tags
+
+        class FakeStore:
+            def get(self, _record_id):
+                return StubRecord(["bridge-archive", "bank:qb", "project:qp", "key:qk"])
+
+        engine = IaiEngine.__new__(IaiEngine)
+        engine._store = FakeStore()  # type: ignore[attr-defined]
+        rid = "12345678-1234-5678-1234-567812345678"
+        self.assertEqual(engine._scoped_bridge_key(rid, {"bank:qb", "project:qp"}), "qk")
+        self.assertIsNone(engine._scoped_bridge_key(rid, {"bank:other", "project:qp"}))
+
     def test_token_file_missing_denies(self) -> None:
         lonely = BridgeServer(token_file=os.path.join(self.tmp.name, "nope.json"), engine=MemoryEngine())
         reply = _frame(lonely, "health", {})

@@ -40,6 +40,73 @@ interface JsonRpcResponse {
 }
 
 /** IAI MCP client */
+export interface IaiNormalizedHit {
+	id: string;
+	content: string;
+	source?: string;
+	timestamp?: string;
+	score?: number;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function asString(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Normalize a `memory_recall` response (`{hits: [{record_id, literal_surface,
+ * score, ...}]}`) into PrimePi result rows.
+ */
+export function normalizeRecallHits(response: unknown): IaiNormalizedHit[] {
+	const record = asRecord(response);
+	const hits = Array.isArray(record?.hits) ? record.hits : [];
+	const out: IaiNormalizedHit[] = [];
+	for (const hit of hits) {
+		const node = asRecord(hit);
+		if (!node) continue;
+		const id = asString(node.record_id);
+		if (!id) continue;
+		out.push({
+			id,
+			content: asString(node.literal_surface) ?? "",
+			score: asNumber(node.score),
+			timestamp: asString(node.captured_at) ?? undefined,
+		});
+	}
+	return out;
+}
+
+/**
+ * Normalize a `memory_search` response (`{hits: [{record_id, surface,
+ * tier, lane, score/cos}], frame}`) into PrimePi result rows.
+ */
+export function normalizeSearchHits(response: unknown): IaiNormalizedHit[] {
+	const record = asRecord(response);
+	const hits = Array.isArray(record?.hits) ? record.hits : [];
+	const out: IaiNormalizedHit[] = [];
+	for (const hit of hits) {
+		const node = asRecord(hit);
+		if (!node) continue;
+		const id = asString(node.record_id);
+		if (!id) continue;
+		out.push({
+			id,
+			content: asString(node.surface) ?? "",
+			score: asNumber(node.score) ?? asNumber(node.cos),
+		});
+	}
+	return out;
+}
+
 export class IaiMcpClient {
 	private socketPath: string;
 	private connectTimeoutMs: number;
@@ -159,7 +226,9 @@ export class IaiMcpClient {
 	}
 
 	/**
-	 * Recall memories from the IAI brain.
+	 * Recall memories from the IAI brain. The engine's wire contract takes
+	 * `cue` (required) and answers with `{hits: [...]}`; both are normalized
+	 * here so callers keep PrimePi naming.
 	 */
 	async recall(options: IaiRecallOptions): Promise<{
 		results: Array<{
@@ -171,43 +240,40 @@ export class IaiMcpClient {
 			importance?: number;
 		}>;
 	}> {
-		return this.callTool("memory_recall", {
-			query: options.query,
-			bank: options.bank,
-			budget: options.budget,
-			max_tokens: options.maxTokens,
-			types: options.types,
-			tags: options.tags,
-			tags_match: options.tagsMatch,
+		const response = await this.callTool<unknown>("memory_recall", {
+			cue: options.query,
+			budget_tokens: options.budget,
 		});
+		return { results: normalizeRecallHits(response) };
 	}
 
 	/**
-	 * Search memories using hybrid lexical + semantic search.
+	 * Search memories using hybrid lexical + semantic search. The engine
+	 * takes `{query, k}` and answers `{hits, frame}`; normalized here.
 	 */
 	async search(options: IaiSearchOptions): Promise<{
 		results: Array<{ id: string; content: string; source?: string; timestamp?: string; score?: number }>;
 	}> {
-		return this.callTool("memory_search", {
+		const response = await this.callTool<unknown>("memory_search", {
 			query: options.query,
-			bank: options.bank,
-			limit: options.limit,
+			k: options.limit ?? 8,
 		});
+		return { results: normalizeSearchHits(response) };
 	}
 
 	/**
-	 * Capture a memory turn.
+	 * Capture a memory turn. The engine requires `text`; `cue` defaults to
+	 * the text itself server-side when omitted.
 	 */
 	async capture(input: IaiCaptureInput): Promise<{ id: string; stored: boolean }> {
-		return this.callTool("memory_capture", {
-			content: input.content,
-			context: input.context,
-			source: input.source,
-			importance: input.importance,
+		const response = await this.callTool<{ record_id?: unknown; status?: unknown }>("memory_capture", {
+			text: input.content,
+			cue: input.content.slice(0, 500),
 			session_id: input.sessionId,
-			tags: input.tags,
-			metadata: input.metadata,
+			extra_tags: input.tags,
 		});
+		const id = typeof response?.record_id === "string" ? response.record_id : "";
+		return { id, stored: id.length > 0 };
 	}
 
 	/**
