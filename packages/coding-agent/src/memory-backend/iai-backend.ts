@@ -33,6 +33,7 @@ import {
 	type IaiDaemonStatus,
 } from "./iai-client";
 import { loadIaiConfig, type IaiBackendConfig } from "./iai-config";
+import { enqueueSync, syncQueuePath } from "./iai-bridge-sync";
 
 const DEFAULT_RECALL_BUDGET = 4000;
 const DEFAULT_RECALL_MAX_TOKENS = 2000;
@@ -529,6 +530,19 @@ export class IaiMemoryBackend implements MemoryBackend {
 				cwd: this.cwd,
 			},
 		});
+		// Bridge archival leg (fail-open): queue for Linux long-term memory.
+		// A downed tunnel or daemon must never break the local retain above.
+		try {
+			await enqueueSync(syncQueuePath(this.agentDir), {
+				key: `transcript-${sourceId}`,
+				bank: this.bankConfig.bank || "default",
+				projectId: this.bankConfig.bank || "default",
+				sessionId: this.sessionId,
+				content: transcript,
+			});
+		} catch {
+			// Fail-open by design.
+		}
 	}
 
 	// ========== Helper Methods ==========

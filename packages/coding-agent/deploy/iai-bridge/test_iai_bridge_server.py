@@ -60,7 +60,14 @@ class BridgeServerTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.token_file = os.path.join(self.tmp.name, ".bridge-token")
         _write_tokens(self.token_file, "sekret")
-        self.server = BridgeServer(token_file=self.token_file, engine=MemoryEngine())
+        from idempotency import IdempotencyJournal
+
+        self.server = BridgeServer(
+            token_file=self.token_file,
+            engine=MemoryEngine(),
+            journal=IdempotencyJournal(os.path.join(self.tmp.name, "idem.sqlite3")),
+        )
+        self.addCleanup(self.server.close)
 
     def test_auth_before_dispatch(self) -> None:
         reply = _frame(self.server, "archive", _archive_body(), auth="wrong")
@@ -149,6 +156,36 @@ class BridgeServerTest(unittest.TestCase):
         rid = "12345678-1234-5678-1234-567812345678"
         self.assertEqual(engine._scoped_bridge_key(rid, {"bank:qb", "project:qp"}), "qk")
         self.assertIsNone(engine._scoped_bridge_key(rid, {"bank:other", "project:qp"}))
+
+    def test_restart_recovery_replays_without_rewrite(self) -> None:
+        from idempotency import IdempotencyJournal
+
+        first = _frame(self.server, "archive", _archive_body())
+        self.assertEqual(first["kind"], "archive-ack")
+        # Simulate a crash: drop the server, reopen the journal on the same file.
+        self.server.close()
+        fresh = BridgeServer(
+            token_file=self.token_file,
+            engine=self.server.engine,
+            journal=IdempotencyJournal(os.path.join(self.tmp.name, "idem.sqlite3")),
+        )
+        self.addCleanup(fresh.close)
+        replay = _frame(fresh, "archive", _archive_body())
+        self.assertEqual(replay["kind"], "archive-ack")
+        self.assertTrue(replay["body"].get("duplicate"))
+        self.assertEqual(len(self.server.engine.records), 1)
+
+    def test_key_reuse_with_different_content_rejected(self) -> None:
+        _frame(self.server, "archive", _archive_body())
+        clash = dict(_archive_body())
+        clash["content"] = "totally different content"
+        clash["contentHash"] = "0" * 64
+        import hashlib
+
+        clash["contentHash"] = hashlib.sha256(clash["content"].encode()).hexdigest()
+        reply = _frame(self.server, "archive", clash)
+        self.assertEqual(reply["kind"], "error")
+        self.assertEqual(reply["body"]["code"], "idempotency-reuse")
 
     def test_token_file_missing_denies(self) -> None:
         lonely = BridgeServer(token_file=os.path.join(self.tmp.name, "nope.json"), engine=MemoryEngine())

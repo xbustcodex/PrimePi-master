@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import hmac
 import json
+import os
 import socket
 import socketserver
 import ssl
@@ -325,7 +326,7 @@ class MemoryEngine(Engine):
             "content": body.get("content", ""),
         }
         self.records[body["key"]] = record
-        return {"ok": True, "key": body["key"]}
+        return {"ok": True, "key": body["key"], "record_id": f"fake-{body['key']}"}
 
     def recall(self, body: dict) -> dict:
         if self.fail_next:
@@ -351,7 +352,17 @@ class MemoryEngine(Engine):
 class BridgeServer:
     token_file: str
     engine: Engine
-    pending_acks: dict = field(default_factory=dict)
+    journal: Any = None
+
+    def close(self) -> None:
+        journal = self.journal
+        self.journal = None
+        close = getattr(journal, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
 
     def handle_frame(self, frame: str) -> dict:
         envelope, error = parse_envelope(frame)
@@ -379,21 +390,50 @@ class BridgeServer:
         problem = validate_archive_body(body)
         if problem is not None:
             return self._error(req_id, problem, "Archive body failed validation.")
+        from idempotency import IdempotencyJournal, KeyReuseError
+
         idem = body["idempotencyKey"]
-        if idem in self.pending_acks:
-            ack = dict(self.pending_acks[idem])
-            ack["duplicate"] = True
-            return self._reply(req_id, "archive-ack", ack)
+        journal = self.journal
+        if journal is None:
+            raise EngineError("idempotency journal is not configured")
+        try:
+            replay = journal.begin(
+                key=idem,
+                record_key=body["key"],
+                bank=body.get("bank", ""),
+                project=body.get("projectId", ""),
+                content_hash=body.get("contentHash", ""),
+                size_bytes=body.get("bytes", 0),
+            )
+        except KeyReuseError as exc:
+            return self._error(req_id, "idempotency-reuse", str(exc)[:200])
+        if replay["status"] == "replay-acked":
+            return self._reply(
+                req_id,
+                "archive-ack",
+                {
+                    "key": body["key"],
+                    "idempotencyKey": idem,
+                    "durable": True,
+                    "storedAt": "",
+                    "duplicate": True,
+                    "recordId": replay.get("record_id"),
+                },
+            )
         ack_body = self.engine.archive(body)
-        ack = {
-            "key": body["key"],
-            "idempotencyKey": idem,
-            "durable": True,
-            "storedAt": body.get("storedAt") or "",
-            "engine": ack_body if isinstance(ack_body, dict) else {},
-        }
-        self.pending_acks[idem] = {k: v for k, v in ack.items() if k != "duplicate"}
-        return self._reply(req_id, "archive-ack", ack)
+        record_id = ack_body.get("record_id") if isinstance(ack_body, dict) else None
+        journal.complete(idem, str(record_id))
+        return self._reply(
+            req_id,
+            "archive-ack",
+            {
+                "key": body["key"],
+                "idempotencyKey": idem,
+                "durable": True,
+                "storedAt": "",
+                "engine": ack_body if isinstance(ack_body, dict) else {},
+            },
+        )
 
     def _handle_recall(self, req_id: str, body: Any) -> dict:
         problem = validate_recall_body(body)
@@ -443,7 +483,11 @@ def load_config(path: str) -> dict:
 def serve_forever(config_path: str, token_file: str) -> None:
     config = load_config(config_path)
     engine = IaiEngine()
-    server_logic = BridgeServer(token_file=token_file, engine=engine)
+    from idempotency import IdempotencyJournal
+
+    store_dir = os.environ.get("IAI_MCP_STORE") or os.path.join(os.path.expanduser("~"), ".iai-mcp")
+    journal = IdempotencyJournal(os.path.join(store_dir, "bridge-idempotency.sqlite3"))
+    server_logic = BridgeServer(token_file=token_file, engine=engine, journal=journal)
 
     class Handler(socketserver.StreamRequestHandler):
         def handle(self) -> None:
