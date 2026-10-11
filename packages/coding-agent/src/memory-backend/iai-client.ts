@@ -1,17 +1,46 @@
 /**
  * IAI MCP client wrapper for communicating with the IAI daemon.
- * Uses JSON-RPC over Unix domain sockets (or named pipes on Windows).
+ *
+ * Transports mirror `iai_mcp/_ipc.py`: Unix domain sockets on POSIX, and
+ * on Windows a loopback TCP listener whose port lives in `.daemon.port`
+ * with a token-first handshake (`.daemon.token`). An
+ * `IAI_DAEMON_SOCKET_PATH` override re-roots both files (`<path>.port`,
+ * `<path>.token`) exactly like the engine.
  */
 import * as fs from "node:fs";
 import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 
-// SOCKET_PATH from iai-mcp/concurrency.py - default location for IAI daemon socket
-const SOCKET_PATH = (() => {
-	if (typeof process !== "undefined" && process.platform === "win32") {
-		return "\\\\.\\pipe\\iai-mcp-daemon";
+function homeDir(): string {
+	return process.env.HOME || process.env.USERPROFILE || os.homedir();
+}
+
+// Default POSIX endpoint; kept for compatibility (see SOCKET_PATH below).
+const SOCKET_PATH = process.env.IAI_DAEMON_SOCKET_PATH ?? `${homeDir()}/.iai-mcp/.daemon.sock`;
+
+function ipcBase(): string {
+	return process.env.IAI_DAEMON_SOCKET_PATH ?? `${homeDir()}/.iai-mcp/.daemon`;
+}
+
+function readPortFile(): number | undefined {
+	try {
+		const raw = fs.readFileSync(`${ipcBase()}.port`, "utf8").trim();
+		const port = Number.parseInt(raw, 10);
+		return Number.isInteger(port) && port > 0 ? port : undefined;
+	} catch {
+		return undefined;
 	}
-	return `${process.env.HOME || process.env.USERPROFILE}/.iai-mcp/.daemon.sock`;
-})();
+}
+
+function readDaemonToken(): string | undefined {
+	try {
+		const token = fs.readFileSync(`${ipcBase()}.token`, "utf8").trim();
+		return token.length > 0 ? token : undefined;
+	} catch {
+		return undefined;
+	}
+}
 import type {
 	IaiDaemonConfig,
 	IaiMcpTool,
@@ -113,12 +142,12 @@ export class IaiMcpClient {
 	private requestTimeoutMs: number;
 	private pendingRequests = new Map<
 		string | number,
-		{ resolve: (value: unknown) => void; reject: (error: Error) => void }
+		{ resolve: (value: unknown) => void; reject: (error: Error) => void; socket?: net.Socket }
 	>();
 	private nextId = 1;
 
 	constructor(config: IaiDaemonConfig = {}) {
-		this.socketPath = config.socketPath ?? SOCKET_PATH.toString();
+		this.socketPath = config.socketPath ?? SOCKET_PATH;
 		this.connectTimeoutMs = config.connectTimeoutMs ?? 5000;
 		this.requestTimeoutMs = config.requestTimeoutMs ?? 30000;
 	}
@@ -127,8 +156,14 @@ export class IaiMcpClient {
 	 * Connect to the IAI daemon and start listening for responses.
 	 */
 	async connect(): Promise<void> {
-		// Connection is established per-request via the socket
-		// We verify the socket exists
+		// Connections are established per request; here we only verify the
+		// daemon endpoint exists (socket file on POSIX, port file on Windows).
+		if (process.platform === "win32") {
+			if (readPortFile() === undefined) {
+				throw new Error("IAI daemon is not running (no .daemon.port file). Start it first.");
+			}
+			return;
+		}
 		if (!fs.existsSync(this.socketPath)) {
 			throw new Error(`IAI daemon socket not found at ${this.socketPath}. Is the daemon running?`);
 		}
@@ -143,7 +178,9 @@ export class IaiMcpClient {
 		const { promise, resolve, reject } = Promise.withResolvers<T>();
 
 		const timeout = setTimeout(() => {
+			const pending = this.pendingRequests.get(id);
 			this.pendingRequests.delete(id);
+			pending?.socket?.destroy();
 			reject(new Error(`Request ${method} timed out after ${this.requestTimeoutMs}ms`));
 		}, this.requestTimeoutMs);
 
@@ -163,16 +200,18 @@ export class IaiMcpClient {
 	}
 
 	/**
-	 * Send raw request to the Unix domain socket.
+	 * Send a raw request: Unix domain socket on POSIX, loopback TCP with a
+	 * token-first handshake on Windows (mirrors `iai_mcp/_ipc.py`).
 	 */
 	private async sendRequest(request: JsonRpcRequest): Promise<void> {
 		const data = JSON.stringify(request) + "\n";
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
-		{
-			const socket = net.createConnection(this.socketPath, () => {
-				socket.write(data);
+		const attach = (socket: net.Socket, payload: string): void => {
+			const entry = this.pendingRequests.get(request.id);
+			if (entry) entry.socket = socket;
+			socket.on("connect", () => {
+				socket.write(payload);
 			});
-
 			let buffer = "";
 			socket.on("data", chunk => {
 				buffer += chunk.toString();
@@ -190,13 +229,13 @@ export class IaiMcpClient {
 							} else {
 								pending.resolve(response.result);
 							}
+							pending.socket?.destroy();
 						}
 					} catch {
 						// Ignore parse errors
 					}
 				}
 			});
-
 			socket.on("error", err => {
 				const pending = this.pendingRequests.get(request.id);
 				if (pending) {
@@ -205,7 +244,6 @@ export class IaiMcpClient {
 				}
 				reject(err);
 			});
-
 			socket.on("close", () => {
 				// Clean up any pending requests
 				for (const [, pending] of this.pendingRequests) {
@@ -214,7 +252,22 @@ export class IaiMcpClient {
 				this.pendingRequests.clear();
 				resolve();
 			});
+		};
+		if (process.platform === "win32") {
+			const port = readPortFile();
+			if (port === undefined) {
+				reject(new Error("IAI daemon is not running (no .daemon.port file)."));
+				return promise;
+			}
+			const token = readDaemonToken();
+			if (token === undefined) {
+				reject(new Error("IAI daemon token is missing; the daemon may still be starting."));
+				return promise;
+			}
+			attach(net.createConnection({ host: "127.0.0.1", port }), `${token}\n${data}`);
+			return promise;
 		}
+		attach(net.createConnection(this.socketPath), data);
 		return promise;
 	}
 
@@ -363,7 +416,7 @@ export class IaiMcpClient {
 	 * Close any open connections.
 	 */
 	async close(): Promise<void> {
-		// No persistent connection to close
+		for (const [, pending] of this.pendingRequests) pending.socket?.destroy();
 		this.pendingRequests.clear();
 	}
 }
