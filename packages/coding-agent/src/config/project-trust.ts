@@ -1,5 +1,5 @@
 /**
- * Project trust resolution for OMP.
+ * Project trust resolution for PrimePi.
  *
  * Determines whether a project is trusted. In the SDK, this uses the default
  * project trust setting when no explicit trust decision exists. The CLI can
@@ -43,10 +43,10 @@ export interface ResolveProjectTrustedOptions {
 	onExtensionError?: (message: string) => void;
 }
 
-const APP_NAME = "OMP";
+const APP_NAME = "PrimePi";
 
 function formatProjectTrustPrompt(cwd: string): string {
-	return `Trust project folder?\n${cwd}\n\nThis allows ${APP_NAME} to load ${CONFIG_DIR_NAME} settings and resources, install missing project packages, and execute project extensions.`;
+	return `Trust project folder?\n${cwd}\n\nThis allows PrimePi to load ${CONFIG_DIR_NAME} settings and resources, install missing project packages, and execute project extensions.`;
 }
 
 async function selectProjectTrustOption(
@@ -124,7 +124,7 @@ export async function resolveProjectTrusted(options: ResolveProjectTrustedOption
 /**
  * Emits a project_trust event to all loaded extensions.
  * Extensions can respond with { trusted: "yes"|"no", remember: boolean } to auto-decide.
- * Note: In OMP, extension event emission happens via the runner after initialization.
+ // Note: In PrimePi, extension event emission happens via the runner after initialization.
  * This is a placeholder for future integration.
  */
 async function emitProjectTrustEvent(
