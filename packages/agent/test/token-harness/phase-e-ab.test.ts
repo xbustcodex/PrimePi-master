@@ -23,8 +23,6 @@ describe("token-harness Phase E A/B comparison", () => {
 		);
 		expect(resultB.ok).toBe(true);
 		expect(resultB.report.reductionPct).toBeGreaterThan(0);
-		expect(resultB.report.outputTokens).toBeLessThanOrEqual(
-			resultB.report.inputTokens,
-		);
+		expect(resultB.report.outputTokens).toBeLessThanOrEqual(resultB.report.inputTokens);
 	});
 });

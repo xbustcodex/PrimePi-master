@@ -11,6 +11,41 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import type {
+	IaiDaemonConfig,
+	IaiMcpTool,
+	IaiCaptureInput,
+	IaiRecallOptions,
+	IaiSearchOptions,
+	IaiConsolidateOptions,
+	IaiDaemonStatus,
+	IaiBankConfig,
+} from "./iai-types";
+
+/** JSON-RPC request envelope */
+interface JsonRpcRequest {
+	jsonrpc: "2.0";
+	id: string | number;
+	method: string;
+	params?: Record<string, unknown>;
+}
+
+/** JSON-RPC response envelope */
+interface JsonRpcResponse {
+	jsonrpc: "2.0";
+	id: string | number;
+	result?: unknown;
+	error?: { code: number; message: string; data?: unknown };
+}
+
+/** IAI MCP client */
+export interface IaiNormalizedHit {
+	id: string;
+	content: string;
+	source?: string;
+	timestamp?: string;
+	score?: number;
+}
 
 function homeDir(): string {
 	return process.env.HOME || process.env.USERPROFILE || os.homedir();
@@ -41,16 +76,6 @@ function readDaemonToken(): string | undefined {
 		return undefined;
 	}
 }
-import type {
-	IaiDaemonConfig,
-	IaiMcpTool,
-	IaiCaptureInput,
-	IaiRecallOptions,
-	IaiSearchOptions,
-	IaiConsolidateOptions,
-	IaiDaemonStatus,
-	IaiBankConfig,
-} from "./iai-types";
 
 /** JSON-RPC request envelope */
 interface JsonRpcRequest {
@@ -234,24 +259,23 @@ export class IaiMcpClient {
 					} catch {
 						// Ignore parse errors
 					}
-				}
-			});
-			socket.on("error", err => {
-				const pending = this.pendingRequests.get(request.id);
-				if (pending) {
-					this.pendingRequests.delete(request.id);
-					pending.reject(err);
-				}
-				reject(err);
-			});
-			socket.on("close", () => {
-				// Clean up any pending requests
-				for (const [, pending] of this.pendingRequests) {
-					pending.reject(new Error("Socket closed unexpectedly"));
-				}
-				this.pendingRequests.clear();
-				resolve();
-			});
+				});
+				socket.on("error", err => {
+					const pending = this.pendingRequests.get(request.id);
+					if (pending) {
+						this.pendingRequests.delete(request.id);
+						pending.reject(err);
+					}
+					reject(err);
+				});
+				socket.on("close", () => {
+					// Clean up any pending requests
+					for (const [, pending] of this.pendingRequests) {
+						pending.reject(new Error("Socket closed unexpectedly"));
+					}
+					this.pendingRequests.clear();
+					resolve();
+				});
 		};
 		if (process.platform === "win32") {
 			const port = readPortFile();
