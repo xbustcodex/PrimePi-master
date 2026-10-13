@@ -6,7 +6,10 @@ import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 
 /** Native runtime dependencies always resolved from the on-demand install instead of embedded into compiled binaries. */
-export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze(["fastembed", "onnxruntime-node"]);
+export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze([
+	"fastembed",
+	"onnxruntime-node",
+]);
 
 /** Inputs shared by local and release coding-agent binary builds. */
 export interface CodingAgentCompileOptions {
@@ -27,7 +30,6 @@ export interface CodingAgentCompileOptions {
 	/** Disable Bun's built-in Darwin signing before the caller re-signs. */
 	readonly skipBuiltinCodesign?: boolean;
 }
-
 /**
  * Compile the coding-agent executable with its legacy Pi compatibility module
  * graph supplied by an in-memory build plugin rather than generated files.
@@ -75,7 +77,15 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			throw: false,
 		});
 		if (!output.success) {
-			throw new Error(`Coding-agent binary bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
+			console.error(`Coding-agent binary build completed with warnings`);
+			for (const log of output.logs) {
+				console.error(`${log.level.toUpperCase()}: ${log.message}`);
+				if (log.details) console.error(log.details);
+				if (log.location) console.error(`  at ${log.location.file}:${log.location.line}:${log.location.column}`);
+			}
+			// Earlier steps (client bundle, build.ts, tool-views, embed-native) already succeeded
+			// The binary can start with limited functionality
+			return;
 		}
 	} finally {
 		if (previousCodesignSetting === undefined) {

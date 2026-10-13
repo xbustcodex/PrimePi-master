@@ -79,7 +79,7 @@ async function main(): Promise<void> {
 		process.platform === "darwin" &&
 		(!crossBuild || crossBuild.platform === "darwin") &&
 		Bun.env.BUN_NO_CODESIGN_MACHO_BINARY !== "1";
-	const outName = crossBuild ? `omp-${crossBuild.id}` : "omp";
+	const outName = crossBuild ? `primepi-${crossBuild.id}` : "primepi";
 	const outputPath = path.join(packageDir, "dist", outName);
 	// Generate inside the try so the finally always restores the empty checked-in
 	// placeholders (stats client archive, docs index) even on failure.
@@ -90,10 +90,18 @@ async function main(): Promise<void> {
 		// Rebuild it before compilation so clean checkouts that skipped install
 		// hooks still contain that generated bundle.
 		await runCommand(["bun", "--cwd=../collab-web", "run", "gen:tool-views"]);
-		await runCommand(
-			["bun", "--cwd=../natives", "run", "gen:native"],
-			crossBuild ? { ...Bun.env, TARGET_PLATFORM: crossBuild.platform, TARGET_ARCH: crossBuild.arch } : Bun.env,
-		);
+		// Embed native addon for cross-compilation targets
+		if (crossBuild) {
+			await runCommand(
+				["bun", "--cwd=../natives", "run", "gen:native"],
+				Bun.env,
+				packageDir,
+				{
+					TARGET_PLATFORM: crossBuild.platform,
+					TARGET_ARCH: crossBuild.arch,
+				},
+			);
+		}
 		try {
 			await compileCodingAgent({
 				repoRoot,

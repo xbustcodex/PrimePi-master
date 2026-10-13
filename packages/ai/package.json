@@ -138,6 +138,10 @@
 			"types": "./src/utils/schema/*.ts",
 			"import": "./src/utils/schema/*.ts"
 		},
+		"./types": {
+			"types": "./src/types.ts",
+			"import": "./src/types.ts"
+		},
 		"./*.js": "./src/*.ts"
 	},
 	"scripts": {

@@ -259,7 +259,8 @@ export class IaiMcpClient {
 					} catch {
 						// Ignore parse errors
 					}
-				});
+				}
+			});
 				socket.on("error", err => {
 					const pending = this.pendingRequests.get(request.id);
 					if (pending) {
