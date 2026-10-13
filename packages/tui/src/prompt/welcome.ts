@@ -378,10 +378,10 @@ export const PI_LOGO = ["████████████", "   ██  █�
 const LOGO_WIDTH = Math.max(...PI_LOGO.map(row => row.length));
 
 /**
- * The `omp` wordmark in half-blocks, set beside {@link PI_LOGO} from its second
+ * The `primepi` wordmark in half-blocks, set beside {@link PI_LOGO} from its second
  * row: the `p` descends into the fourth, the version takes the fifth.
  */
-const WORDMARK = ["▄▀▀▄ █▀▄▀▄ █▀▀▄", "▀▄▄▀ █ █ █ █▄▄▀", "           █"];
+const WORDMARK = ["▄▀▀▄ █▀▄▀▄ █▀▀▄ ▄▀▀▄ ▄▀▄▀", "▀▄▄▀ █ █ █ █▄▄▀ ▀▄▄▀ ▀▄ ▀ ▀", "           █           █ █ █"];
 
 /** Columns of {@link WORDMARK}. */
 const WORDMARK_WIDTH = Math.max(...WORDMARK.map(row => row.length));

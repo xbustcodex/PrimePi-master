@@ -39,7 +39,6 @@ import { buildInitialMessage } from "./cli/initial-message";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
 import { applyStartupCwd } from "./cli/startup-cwd";
-import { getLatestRelease } from "./cli/update-cli";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -163,7 +162,6 @@ import {
 	cfgTuiImeSafeCursor,
 	cfgTuiMaxInlineImages,
 	cfgTuiResizeScrollback,
-	cfgUpdateChannel,
 } from "./modes/settings";
 import {
 	cfgDefaultThinkingLevel,
@@ -234,13 +232,8 @@ async function checkForNewVersion(currentVersion: string): Promise<string | unde
 	if (!cfgStartupCheckUpdate.get(settings)) {
 		return;
 	}
-	try {
-		const channel = cfgUpdateChannel.get(settings);
-		const release = await getLatestRelease({ timeoutMs: 5_000, channel });
-		return Bun.semver.order(release.version, currentVersion) > 0 ? release.version : undefined;
-	} catch {
-		return undefined;
-	}
+	// PrimePi updates are not yet configured; disable upstream OMP update checks
+	return undefined;
 }
 
 // Protocol hosts inherit OMP's neutral defaults for settings declaring `protocolDefault`

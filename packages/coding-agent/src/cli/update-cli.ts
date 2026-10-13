@@ -2227,109 +2227,14 @@ export async function runUpdateCommand(opts: {
 	channel?: UpdateChannel;
 }): Promise<void> {
 	console.log(chalk.dim(`Current version: ${VERSION}`));
-	const persistedChannel = readPersistedChannel() ?? "stable";
-	const channel = opts.channel ?? persistedChannel;
-	const isChannelSwitch = opts.channel !== undefined && opts.channel !== persistedChannel;
-	if (channel === "canary") console.log(chalk.dim("Current channel: canary"));
-
-	// Check for updates
-	let release: ReleaseInfo;
-	try {
-		release = await getLatestRelease({ channel });
-	} catch (err) {
-		console.error(chalk.red(`Failed to check for updates: ${err}`));
-		process.exit(1);
-	}
-
-	const comparison = compareVersions(release.version, VERSION);
-
-	if (comparison <= 0 && !opts.force && !isChannelSwitch) {
-		const icon = theme?.status?.success ?? "✔";
-		console.log(chalk.green(`${icon} Already up to date`));
-		return;
-	}
-
-	if (isChannelSwitch) {
-		console.log(
-			chalk.yellow(
-				`Switching to ${channel} ${release.version}${comparison <= 0 ? ` (downgrade from ${VERSION})` : ""}`,
-			),
-		);
-	} else if (comparison > 0) {
-		console.log(chalk.cyan(`New version available: ${release.version}`));
-	} else {
-		console.log(chalk.yellow(`Forcing reinstall of ${release.version}`));
-	}
-	if (release.packages.pkg !== PACKAGE) {
-		console.log(chalk.cyan(`The npm package moved to ${release.packages.pkg}; updating migrates this install.`));
-	}
-
+	console.log(chalk.yellow("PrimePi updates are not yet configured."));
+	console.log(chalk.dim("This build cannot check for or install updates from a PrimePi release source."));
 	if (opts.check) {
-		// Just check, don't install
 		return;
 	}
-
-	// Choose update method based on the prioritized omp binary in PATH. For
-	// binary-only releases the package managers are never consulted: a bun/npm
-	// symlink resolves to method "binary" and is replaced in place, keeping the
-	// same PATH entry live.
-	try {
-		const forceBinary = shouldForceBinaryUpdate(release);
-		const allowPrerelease = channel === "canary";
-		const target = await resolveUpdateTarget({ allowPackageManagers: !forceBinary });
-		if (channel === "canary" && (target.method === "nix" || target.method === "brew" || target.method === "mise")) {
-			console.log(chalk.yellow("Canary updates are only supported for bun, npm, or binary installs."));
-			return;
-		}
-		if (target.method === "nix") {
-			console.log(chalk.yellow("This installation is managed by Nix and cannot update itself."));
-			console.log(chalk.dim("Update the flake input or profile that provides omp, then rebuild."));
-			return;
-		} else if (target.method === "brew") {
-			await updateViaHomebrew(release.version, opts.force);
-		} else if (target.method === "mise") {
-			await updateViaMise(release.version, opts.force);
-		} else if (target.method === "bun" || target.method === "npm") {
-			if (forceBinary) {
-				// Reachable in forced mode only through a Windows script
-				// launcher resolved from PATH (the bun/npm bin-dir probes are
-				// skipped), so the launcher path is always known.
-				if (!target.path) throw new Error(`Could not resolve ${APP_NAME} launcher path in PATH`);
-				console.log(chalk.dim("This release ships as a standalone binary; replacing the script launcher."));
-				await updateViaShimTakeover(target.path, release.version, { allowPrerelease });
-				console.log(
-					chalk.yellow(
-						`This install is no longer managed by ${target.method}. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
-					),
-				);
-			} else {
-				await updateViaManager(
-					release,
-					target.path,
-					packageManagerUpdateSteps(target.method, release, allowPrerelease),
-				);
-			}
-		} else {
-			if (forceBinary && target.replacesSymlink) {
-				console.log(chalk.dim("Replacing the package-manager launcher with the standalone binary."));
-			}
-			await updateViaBinaryAt(target.path, release.version, {
-				allowPrerelease,
-				validateExistingTarget: target.validateExistingTarget,
-			});
-			if (forceBinary && target.replacesSymlink) {
-				console.log(
-					chalk.yellow(
-						`This install is no longer managed by bun/npm. Removing the old global package may delete this launcher; if it does, reinstall with: ${installerHint()}`,
-					),
-				);
-			}
-		}
-		if (opts.channel) persistChannel(channel);
-	} catch (err) {
-		console.error(chalk.red(`Update failed: ${err}`));
-		process.exit(1);
-	}
+	console.log(
+		chalk.dim("To update, reinstall PrimePi from the source repository or wait for a dedicated release channel."),
+	);
 }
 
 /**
@@ -2342,17 +2247,15 @@ ${chalk.bold("Usage:")}
   ${APP_NAME} update [options]
 
 ${chalk.bold("Options:")}
-  -c, --check     Check for updates without installing
-  -f, --force     Force reinstall even if up to date
-  -l, --plugins   Update installed plugins
-  --canary        Switch to the canary channel and update
-  --stable        Switch back to the stable channel
+  -c, --check     Check for updates without installing (not supported yet)
+  -f, --force     Force reinstall even if up to date (not supported yet)
+  -l, --plugins   Update installed plugins (not supported yet)
+  --canary        Switch to the canary channel (not supported yet)
+  --stable        Switch back to the stable channel (not supported yet)
 
-${chalk.bold("Examples:")}
-  ${APP_NAME} update              Update to latest version
-  ${APP_NAME} update --check      Check if updates are available
-  ${APP_NAME} update --force      Force reinstall
-  ${APP_NAME} update -l           Update installed plugins
-  ${APP_NAME} update --canary    Switch to the canary channel and update
+${chalk.bold("Note:")}
+  PrimePi updates are not yet configured. There is no dedicated PrimePi
+  release channel at this time. To update, reinstall PrimePi from the
+  source repository.
 `);
 }

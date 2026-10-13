@@ -261,22 +261,22 @@ export class IaiMcpClient {
 					}
 				}
 			});
-				socket.on("error", err => {
-					const pending = this.pendingRequests.get(request.id);
-					if (pending) {
-						this.pendingRequests.delete(request.id);
-						pending.reject(err);
-					}
-					reject(err);
-				});
-				socket.on("close", () => {
-					// Clean up any pending requests
-					for (const [, pending] of this.pendingRequests) {
-						pending.reject(new Error("Socket closed unexpectedly"));
-					}
-					this.pendingRequests.clear();
-					resolve();
-				});
+			socket.on("error", err => {
+				const pending = this.pendingRequests.get(request.id);
+				if (pending) {
+					this.pendingRequests.delete(request.id);
+					pending.reject(err);
+				}
+				reject(err);
+			});
+			socket.on("close", () => {
+				// Clean up any pending requests
+				for (const [, pending] of this.pendingRequests) {
+					pending.reject(new Error("Socket closed unexpectedly"));
+				}
+				this.pendingRequests.clear();
+				resolve();
+			});
 		};
 		if (process.platform === "win32") {
 			const port = readPortFile();

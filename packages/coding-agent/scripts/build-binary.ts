@@ -94,12 +94,8 @@ async function main(): Promise<void> {
 		if (crossBuild) {
 			await runCommand(
 				["bun", "--cwd=../natives", "run", "gen:native"],
-				Bun.env,
+				{ ...Bun.env, TARGET_PLATFORM: crossBuild.platform, TARGET_ARCH: crossBuild.arch },
 				packageDir,
-				{
-					TARGET_PLATFORM: crossBuild.platform,
-					TARGET_ARCH: crossBuild.arch,
-				},
 			);
 		}
 		try {
