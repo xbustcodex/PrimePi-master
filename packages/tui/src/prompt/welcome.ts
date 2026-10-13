@@ -208,17 +208,7 @@ export class WelcomeComponent implements Component {
 		const lockupRow = keyed(
 			row(
 				[
-					node(
-						"image",
-						{
-							builtin: "omp",
-							alt: APP_NAME,
-							w: 128,
-							role: "omp.welcome.logo",
-						},
-						undefined,
-						"logo",
-					),
+					logoNode(PI_LOGO, true, "omp.welcome.logo"),
 					keyed(
 						col(
 							[
@@ -412,14 +402,14 @@ function centerBlock(lines: readonly string[], width: number): string[] {
 }
 
 /** The block-grid brand mark as accent lines; `shimmer` declares the terminal-clocked shine sweep. */
-export function logoNode(lines: readonly string[], shimmer: boolean): NativeNode {
+export function logoNode(lines: readonly string[], shimmer: boolean, role = "omp.setup.logo"): NativeNode {
 	return col(
 		lines.map(line =>
 			text([span(line, "accent", shimmer ? { fx: "shimmer" } : undefined)], {
 				wrap: "none",
 			}),
 		),
-		{ align: "center", role: "omp.setup.logo" },
+		{ align: "center", role },
 	);
 }
 
