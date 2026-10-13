@@ -24,9 +24,9 @@ export default class Clip extends Command {
 	};
 
 	static examples = [
-		"omp clip",
-		'omp clip -t "Streaming the lexer" -d "Rewrote the tokenizer live"',
-		"omp clip /tmp/omp-recordings/2026-09-22T10-00-00-1a2b3c4d.ompcast",
+		"primepi clip",
+		'primepi clip -t "Streaming the lexer" -d "Rewrote the tokenizer live"',
+		"primepi clip /tmp/primepi-recordings/2026-09-22T10-00-00-1a2b3c4d.primepicast",
 	];
 
 	async run(): Promise<void> {

@@ -93,6 +93,6 @@ ${chalk.bold("Plugin Options:")}
   --plugin-dir <path>        Load plugin from directory (repeatable)
 
 ${chalk.bold("Useful Commands:")}
-  omp agents unpack           - Export bundled subagents to ~/.omp/agent/agents (default)
-  omp agents unpack --project - Export bundled subagents to ./.omp/agents`;
+  primepi agents unpack           - Export bundled subagents to ~/.primepi/agent/agents (default)
+  primepi agents unpack --project - Export bundled subagents to ./.primepi/agents`;
 }
