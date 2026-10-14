@@ -9,6 +9,7 @@ packages/*/dist-chrome/
 packages/*/dist-firefox/
 target/
 .xwin-cache/
+.turbo/
 *.tsbuildinfo
 *.node
 *.b64.js
