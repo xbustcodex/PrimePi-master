@@ -9,7 +9,7 @@
 
 import { resolveDiscoveryApi, resolveModelPolicy } from "./compat/resolve";
 import type { ModelIdentity } from "./compat/types";
-import { withAccessFlag, withFreeFlag } from "./model-access";
+import { withFreeFlag } from "./model-access";
 import { resolveModelTokenizer } from "./model-tokenizer";
 import { materializeTimeBasedCost } from "./pricing";
 import { type Api, MODEL_KINDS, type Model, type ModelSpec } from "./types";
@@ -383,10 +383,8 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 		const derived = withFreeFlag({ id: model.id });
 		if (derived.free !== undefined) model.free = derived.free;
 	}
-	if (model.access === undefined) {
-		const derived = withAccessFlag({ id: model.id, provider: model.provider });
-		if (derived.access !== undefined) model.access = derived.access;
-	}
+	// `access` stays rule-owned: only `applyCatalogAssignments` may set it, so a
+	// free suffix can never imply that a route answers without credentials.
 	// Configured lifetimes replace catalog lifetimes rather than merging with them.
 	if (spec.promptCacheConfig !== undefined) model.promptCache = { ...spec.promptCacheConfig };
 	return model;

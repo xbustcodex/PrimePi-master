@@ -26,6 +26,7 @@ import {
 } from "@oh-my-pi/pi-catalog/compat/context-window";
 import { applyCatalogMetrics, CatalogMetricsIndex } from "@oh-my-pi/pi-catalog/identity/metrics";
 import { getModelCacheWriteStats, readModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { isCredentialFree } from "@oh-my-pi/pi-catalog/model-access";
 import {
 	createModelManager,
 	fingerprintStaticModels,
@@ -2944,6 +2945,14 @@ export class ModelRegistry {
 		// its model was obtained.
 		if (this.#isProviderDisabled(model.provider)) return undefined;
 		if (this.#isKeylessProvider(model.provider)) {
+			return kNoAuth;
+		}
+		// A catalog rule may mark an individual route credential-free (`access
+		// "anonymous"` / `"local"`). Honor that only when no credential is actually
+		// stored for the provider, so a real key held for an otherwise
+		// credential-free-looking model is still sent, and an authenticated
+		// provider never has its Authorization suppressed.
+		if (isCredentialFree(model) && this.authStorage.keys.source(model.provider) === undefined) {
 			return kNoAuth;
 		}
 		return this.authStorage.keys.get(model.provider, sessionId, {
