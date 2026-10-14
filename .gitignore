@@ -20,6 +20,10 @@ target/
 .env
 .venv
 
+# Root-level credential file removed because it exposed a live API key.
+# Anchored so it cannot capture the tracked secrets.md / secrets/ sources.
+/secret
+
 # Editors
 .vscode/
 .zed/
