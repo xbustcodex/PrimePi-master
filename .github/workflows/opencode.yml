@@ -1,0 +1,63 @@
+# Official OpenCode GitHub Actions integration.
+# https://opencode.ai/docs/github/
+#
+# Deliberately manual-only and read-only for the first runs:
+#   * `workflow_dispatch` requires a `prompt` input (no comment to extract one
+#     from), so an operator triggers each run explicitly.
+#   * `permissions: contents: read` is the whole token surface. A run can read
+#     the tree and run tools, but cannot commit, push, or open PRs.
+#   * `share: false` keeps the session private; public repos default to sharing.
+#   * `use_github_token: true` avoids installing the OpenCode GitHub App and
+#     skips the OIDC exchange, so no `id-token: write` is required.
+#   * `persist-credentials: false` leaves no usable token in .git/config.
+#
+# Jobs that open branches or PRs belong in a separate workflow with explicit
+# `contents: write` / `pull-requests: write`, so they are reviewed on their own
+# and can never be merged into main by this file.
+name: opencode
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Instruction for OpenCode (read-only)."
+        required: true
+        type: string
+        default: >-
+          Report the repository structure and confirm which tools are available.
+          Then run one fast read-only test suite
+          (bun test packages/ai/test/opencode-login.test.ts) and summarise the
+          result. Do not modify, create or delete any file.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  opencode:
+    name: OpenCode (read-only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run OpenCode
+        uses: anomalyco/opencode/github@latest
+        with:
+          # Provider/model is a repo variable, not a secret: it is not sensitive.
+          # Deliberately left to fail loudly rather than silently defaulting to a
+          # paid model if it is unset.
+          model: ${{ vars.OPENCODE_MODEL }}
+          use_github_token: true
+          share: false
+          prompt: ${{ inputs.prompt }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Only the key is secret. Leave unset to run with no provider access.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
