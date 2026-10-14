@@ -1,19 +1,21 @@
 # Official OpenCode GitHub Actions integration.
 # https://opencode.ai/docs/github/
 #
-# Deliberately manual-only and read-only for the first runs:
-#   * `workflow_dispatch` requires a `prompt` input (no comment to extract one
-#     from), so an operator triggers each run explicitly.
-#   * `permissions: contents: read` is the whole token surface. A run can read
-#     the tree and run tools, but cannot commit, push, or open PRs.
-#   * `share: false` keeps the session private; public repos default to sharing.
-#   * `use_github_token: true` avoids installing the OpenCode GitHub App and
-#     skips the OIDC exchange, so no `id-token: write` is required.
+# Scope, deliberately narrow for the first runs:
+#   * Manual only. `workflow_dispatch` needs a `prompt`, so an operator starts
+#     every run; nothing auto-fires from a comment.
+#   * Read-only. `contents: read` is the entire token surface, so a run can
+#     read the tree and use tools but cannot commit, push or open PRs.
+#   * Free-only. A guard step refuses any OPENCODE_MODEL that is not the
+#     OpenRouter free router or an explicit `:free` id, and no Zen credential is
+#     exported, so a paid fallback fails loudly instead of billing silently.
+#   * `use_github_token: true` skips the OIDC exchange, so the OpenCode GitHub
+#     App is not required and no `id-token: write` is needed.
 #   * `persist-credentials: false` leaves no usable token in .git/config.
 #
 # Jobs that open branches or PRs belong in a separate workflow with explicit
-# `contents: write` / `pull-requests: write`, so they are reviewed on their own
-# and can never be merged into main by this file.
+# `contents: write` / `pull-requests: write`, reviewed on their own; this file
+# can never merge to main.
 name: opencode
 
 on:
@@ -25,9 +27,10 @@ on:
         type: string
         default: >-
           Report the repository structure and confirm which tools are available.
-          Then run one fast read-only test suite
-          (bun test packages/ai/test/opencode-login.test.ts) and summarise the
-          result. Do not modify, create or delete any file.
+          Then attempt to run one fast read-only test suite
+          (bun test packages/ai/test/opencode-login.test.ts). If it cannot run
+          because the native addon is not built, say so explicitly instead of
+          working around it. Do not modify, create or delete any file.
 
 permissions:
   contents: read
@@ -38,26 +41,61 @@ concurrency:
 
 jobs:
   opencode:
-    name: OpenCode (read-only)
+    name: OpenCode (read-only, free model)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
           persist-credentials: false
 
+      # The OpenCode action only guarantees `bun` for its own install step, and
+      # the tools it drives need a resolved workspace. Pinning by commit matches
+      # the rest of this repository's action pinning.
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Guard rail: a wrong OPENCODE_MODEL is the one way this workflow could
+      # spend real money. Fail before OpenCode starts rather than after.
+      - name: Guard: refuse any non-free model
+        env:
+          MODEL: ${{ vars.OPENCODE_MODEL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MODEL:-}" ]; then
+            echo "::error::OPENCODE_MODEL is not set. Refusing to guess: an implicit default could select a paid provider."
+            exit 1
+          fi
+          case "$MODEL" in
+            openrouter/openrouter/free)
+              echo "Model: $MODEL (OpenRouter free-only router)"
+              ;;
+            *:free)
+              echo "Model: $MODEL (explicit free id)"
+              ;;
+            *)
+              echo "::error::OPENCODE_MODEL='$MODEL' is not a free model. Allowed: 'openrouter/openrouter/free' or any '<provider>/<model>:free'."
+              exit 1
+              ;;
+          esac
+
+      # Pinned to the commit whose github/action.yml declares use_github_token.
+      # Bump deliberately; do not float to a moving branch.
       - name: Run OpenCode
-        uses: anomalyco/opencode/github@latest
+        uses: anomalyco/opencode/github@3a69bae8459b1aa9b122456a55d9535b23125f33
         with:
-          # Provider/model is a repo variable, not a secret: it is not sensitive.
-          # Deliberately left to fail loudly rather than silently defaulting to a
-          # paid model if it is unset.
           model: ${{ vars.OPENCODE_MODEL }}
           use_github_token: true
           share: false
           prompt: ${{ inputs.prompt }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Only the key is secret. Leave unset to run with no provider access.
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          # Only the OpenRouter key is provided. OPENCODE_API_KEY is deliberately
+          # NOT exported: OpenCode's default small/title model is hosted on Zen,
+          # so withholding the Zen credential is what makes a paid fallback fail
+          # loudly instead of quietly spending credits.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
