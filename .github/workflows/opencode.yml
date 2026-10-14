@@ -61,7 +61,7 @@ jobs:
 
       # Guard rail: a wrong OPENCODE_MODEL is the one way this workflow could
       # spend real money. Fail before OpenCode starts rather than after.
-      - name: Guard: refuse any non-free model
+      - name: "Guard: refuse any non-free model"
         env:
           MODEL: ${{ vars.OPENCODE_MODEL }}
         run: |
